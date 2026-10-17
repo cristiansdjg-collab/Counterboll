@@ -15,8 +15,21 @@ jobs:
           sudo apt-get install -y git zip unzip openjdk-17-jdk autoconf libtool pkg-config zlib1g-dev libncurses5-dev libffi-dev libssl-dev
           pip install buildozer "cython==0.29.36"
       - name: Compilar APK
-        run: buildozer android debug
+        run: |
+          set +e
+          buildozer -v android debug > build.log 2>&1
+          code=$?
+          echo "Codigo de salida: $code"
+          if [ $code -ne 0 ]; then
+            n=$(grep -n "Command failed" build.log | head -1 | cut -d: -f1)
+            echo "===== 60 LINEAS ANTES DEL ERROR ====="
+            sed -n "$((n-60)),$((n))p" build.log
+            exit $code
+          fi
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: apk
-          path: bin/*.apk
+          path: |
+            bin/*.apk
+            build.log
