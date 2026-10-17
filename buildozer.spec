@@ -6,7 +6,7 @@ source.dir = .
 source.include_exts = py,png
 version = 1.12.1
 icon.filename = %(source.dir)s/icon.png
-requirements = hostpython3==3.11.5,python3==3.11.5,pygame
+requirements = hostpython3==3.10.12,python3==3.10.12,pygame
 orientation = landscape
 fullscreen = 1
 android.api = 33
