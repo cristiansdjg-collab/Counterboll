@@ -4,7 +4,7 @@ package.name = attackaliens
 package.domain = org.conturboll
 source.dir = .
 source.include_exts = py,png
-version = 1.12.1
+version = 1.12.2
 icon.filename = %(source.dir)s/icon.png
 requirements = hostpython3==3.10.12,python3==3.10.12,pygame
 orientation = landscape
