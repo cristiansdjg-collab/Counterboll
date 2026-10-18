@@ -5,10 +5,13 @@ import sys
 import traceback
 import os
 import json
+import time
 from array import array
 
 # =====================================================================
-#  ATTACK ON THE ALIENS  -  v1.12.1: opción ELIMINAR perfil (con su progreso, monedas y mejoras) en la pantalla de perfil.
+#  ATTACK ON THE ALIENS  -  v1.13: pantalla que se adapta/centra en cualquier dispositivo, AJUSTES (engrane): volumen de música y
+#  efectos, transparencia y posición de los controles; música distinta para menú, selección, combate y cada BOSS.
+#  (antes v1.12.1: opción ELIMINAR perfil (con su progreso, monedas y mejoras) en la pantalla de perfil.
 #  (antes v1.12: HISTORIA con 8 sectores y 8 BOSSES distintos (dificultad creciente), INFINITO con boss al azar cada 50 puntos.
 #  (antes v1.11.4: gráficos mejorados (luces/brillos, rotación suave,
 #  explosiones, planetas con volumen, viñeta, temblor de pantalla) y rendimiento
@@ -43,15 +46,82 @@ pygame.display.init()
 pygame.font.init()
 
 screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
-SW, SH = screen.get_size()
+
+
+def _cur_size():
+    try:
+        s = pygame.display.get_surface()
+        if s is not None:
+            w, h = s.get_size()
+            if w > 0 and h > 0:
+                return w, h
+    except Exception:
+        pass
+    return 0, 0
+
+
+def _wait_stable_size(max_ms=1600):
+    """En algunos móviles/tablets el tamaño de la ventana cambia justo al arrancar (barras del sistema,
+    rotación...). Se espera a que se estabilice para no quedar descentrado ni con una franja negra."""
+    t0 = pygame.time.get_ticks()
+    last, same = None, 0
+    while pygame.time.get_ticks() - t0 < max_ms:
+        pygame.event.pump()
+        cur = _cur_size()
+        if cur == last and cur[0] > 0:
+            same += 1
+        else:
+            same, last = 0, cur
+        landscape = cur[0] >= cur[1]
+        if same >= 8 and (landscape or pygame.time.get_ticks() - t0 > max_ms * 0.7):
+            break
+        pygame.time.wait(40)
+
+
+_wait_stable_size()
+SW, SH = _cur_size()
 if SW == 0 or SH == 0:
     SW, SH = 1280, 720
     screen = pygame.display.set_mode((SW, SH))
+else:
+    screen = pygame.display.get_surface() or screen
 
 HEIGHT = LOGICAL_H
 WIDTH = int(round(LOGICAL_H * SW / float(SH)))
 canvas = pygame.Surface((WIDTH, HEIGHT)).convert()
-MOUSE_K = WIDTH / float(SW)
+VIEW = [0, 0, SW, SH]          # zona de la ventana donde se dibuja el juego (x, y, ancho, alto)
+
+
+def update_view():
+    """Calcula dónde va el juego dentro de la ventana REAL (centrado y sin deformar) y se mantiene al día
+    si el tamaño de la ventana cambia mientras se juega."""
+    global screen, SW, SH
+    s = pygame.display.get_surface()
+    if s is None:
+        return
+    cw, ch = s.get_size()
+    if cw <= 0 or ch <= 0:
+        return
+    screen, SW, SH = s, cw, ch
+    ca = WIDTH / float(HEIGHT)
+    sa = cw / float(ch)
+    if abs(sa / ca - 1.0) < 0.06:          # casi igual: se llena toda la pantalla
+        vw, vh = cw, ch
+    elif sa > ca:                           # ventana más ancha: barras a los lados
+        vh = ch
+        vw = max(1, int(round(ch * ca)))
+    else:                                   # ventana más alta: barras arriba/abajo (centrado)
+        vw = cw
+        vh = max(1, int(round(cw / ca)))
+    VIEW[0], VIEW[1], VIEW[2], VIEW[3] = (cw - vw) // 2, (ch - vh) // 2, vw, vh
+
+
+def view_to_canvas(px, py):
+    """Pixeles de la ventana -> coordenadas del juego."""
+    return (px - VIEW[0]) * WIDTH / float(VIEW[2]), (py - VIEW[1]) * HEIGHT / float(VIEW[3])
+
+
+update_view()
 clock = pygame.time.Clock()
 PIXEL_SCALE = 2
 
@@ -293,6 +363,8 @@ def draw_fx(surface):
 # =====================================================================
 AUDIO = False
 SR, CH = 22050, 1
+music_vol = 1.0          # volumen de la música (0..1) - se cambia en AJUSTES
+sfx_vol = 1.0            # volumen de los efectos (0..1)
 try:
     _mi = pygame.mixer.get_init()
     if _mi and _mi[1] == -16:
@@ -397,37 +469,216 @@ def _hat(buf, start, vol):
         buf[s0 + i] += random.uniform(-1, 1) * vol * (1.0 - i / float(n))
 
 
-def build_music(boss):
-    if boss:   # rápido, grave y tenso
-        step = 0.15
-        roots = [110.0, 110.0, 87.31, 82.41]
-        chords = [(220.0, 261.63, 329.63), (220.0, 261.63, 329.63), (174.61, 220.0, 261.63), (164.81, 207.65, 246.94)]
-        arp_wave, arp_vol = _saw, 0.06
-    else:      # calmado, espacial
-        step = 0.25
-        roots = [110.0, 87.31, 130.81, 98.0]
-        chords = [(220.0, 261.63, 329.63), (174.61, 220.0, 261.63), (261.63, 329.63, 392.0), (196.0, 246.94, 293.66)]
-        arp_wave, arp_vol = _tri, 0.13
-    pat = [0, 1, 2, 1, 0, 1, 2, 2]
-    buf = [0.0] * int(8 * 4 * step * SR)
-    for c in range(4):
-        for k in range(8):
-            t0 = (c * 8 + k) * step
-            if boss or k % 2 == 0:
-                _note(buf, t0, step * 0.9, roots[c], 0.2, _sq, 1.0)
-            f = chords[c][pat[k]] * (2 if (boss and k % 2) else 1)
-            _note(buf, t0, step * 0.95, f, arp_vol, arp_wave, 1.4)
-            if (boss and k % 2 == 0) or (not boss and k % 4 == 0):
-                _kick(buf, t0, 0.5)
-            if k % 2 == 1:
-                _hat(buf, t0, 0.05 if boss else 0.03)
-    return buf
+_NN = {"C": 0, "D": 2, "E": 4, "F": 5, "G": 7, "A": 9, "B": 11}
+
+
+def nf(name):
+    """'A#3' -> frecuencia en Hz."""
+    st = _NN[name[0]]
+    i = 1
+    if name[i] in "#b":
+        st += 1 if name[i] == "#" else -1
+        i += 1
+    midi = 12 * (int(name[i:]) + 1) + st
+    return 440.0 * 2.0 ** ((midi - 69) / 12.0)
+
+
+_WAVES = {"sq": _sq, "saw": _saw, "tri": _tri, "sin": _sin}
+
+
+def _snare(buf, start, vol):
+    s0, n = int(start * SR), int(0.11 * SR)
+    for i in range(n):
+        if s0 + i >= len(buf):
+            break
+        t = i / float(n)
+        buf[s0 + i] += (random.uniform(-1, 1) * 0.8 + _sin(i * 190.0 / SR) * 0.4) * vol * (1.0 - t) ** 1.6
+
+
+def _clang(buf, start, vol):
+    s0, n = int(start * SR), int(0.22 * SR)
+    for i in range(n):
+        if s0 + i >= len(buf):
+            break
+        t = i / float(n)
+        buf[s0 + i] += (_sin(i * 523.0 / SR) + _sin(i * 811.0 / SR) * 0.7 + random.uniform(-1, 1) * 0.25) * vol * (1.0 - t) ** 2.2
+
+
+def _note_gen(buf, start, dur, freq, vol, wave, decay=1.2):
+    """Igual que _note pero en trocitos (generador) para no trabar el juego con notas largas."""
+    s0, n, ph, inc = int(start * SR), int(dur * SR), 0.0, freq / SR
+    for i in range(n):
+        j = s0 + i
+        if j >= len(buf):
+            break
+        ph += inc
+        buf[j] += wave(ph) * vol * (1.0 - i / float(n)) ** decay * min(1.0, i / 40.0)
+        if i % 2500 == 2499:
+            yield
+    yield
+
+
+def _pad_gen(buf, start, dur, freq, vol):
+    """Nota larga y suave (sinusoide con subida/bajada lenta). Es un generador: se construye por trocitos."""
+    s0, n, inc, ph = int(start * SR), int(dur * SR), freq / SR, 0.0
+    for i in range(n):
+        j = s0 + i
+        if j >= len(buf):
+            break
+        ph += inc
+        buf[j] += math.sin(6.283185307 * ph) * vol * math.sin(3.14159265 * i / n)
+        if i % 3000 == 0:
+            yield
+
+
+# ---- Cada pista: tempo (step), acordes (bajo, [notas]) y qué se toca. Patrones de 8 pasos por acorde:
+#      kick / snare / hat / metal / bell son cadenas de 8 letras ('x' = suena). Todo se sintetiza por código.
+TRACKS = {
+    # MENU: alegre y luminoso (Do mayor)
+    "menu": dict(vol=0.26, step=0.22, bw="sq", arp="tri", avol=0.13, bvol=0.15, bass="eighth", pad=0.03,
+                 pat=[0, 1, 2, 1, 0, 1, 2, 2], kick="x...x...", hat="..x...x.", bell="x.....x.", bellvol=0.05,
+                 prog=[("C3", ["C4", "E4", "G4"]), ("G2", ["B3", "D4", "G4"]), ("A2", ["A3", "C4", "E4"]), ("F2", ["A3", "C4", "F4"])]),
+    # SELECCION (mapa, tienda, color): relajada, cósmica, con eco, sin batería
+    "select": dict(vol=0.30, step=0.45, bw="sin", arp="sin", avol=0.05, bvol=0.14, bass="long", pad=0.05,
+                   pat=[0, 1, 2, 1, 0, 2, 1, 2], aoct=[2] * 8, amask="x.x.x.x.", bell="x...x.x.", bellvol=0.07,
+                   echo=(0.45, 0.45),
+                   prog=[("A2", ["A3", "E4", "B4"]), ("F2", ["F3", "C4", "G4"]), ("C3", ["G3", "D4", "E4"]), ("G2", ["D4", "A4", "B3"])]),
+    # COMBATE normal: rápida y con empuje (Re menor)
+    "game": dict(vol=0.32, step=0.15, bw="sq", arp="saw", avol=0.065, bvol=0.17, bass="pump",
+                 pat=[0, 2, 1, 2, 0, 2, 1, 2], aoct=[1, 1, 1, 1, 2, 1, 1, 2], kick="x..x..x.", snare="....x...", hat="x.x.x.x.",
+                 prog=[("D2", ["D4", "F4", "A4"]), ("A#1", ["A#3", "D4", "F4"]), ("F2", ["A3", "C4", "F4"]), ("C2", ["G3", "C4", "E4"])]),
+    # BOSS 1 CENTINELA ALFA: marcha militar tensa (Mi menor)
+    "boss1": dict(vol=0.38, step=0.15, bw="sq", arp="saw", avol=0.06, bvol=0.2, bass="pump",
+                  pat=[0, 1, 2, 1, 0, 1, 2, 1], aoct=[1, 2, 1, 2, 1, 2, 1, 2], kick="x.x.x.x.", snare="....x...", hat=".x.x.x.x",
+                  prog=[("E2", ["E4", "G4", "B4"]), ("C2", ["C4", "E4", "G4"]), ("D2", ["D4", "F#4", "A4"]), ("B1", ["B3", "D#4", "F#4"])]),
+    # BOSS 2 TITAN ESCARLATA: pesada, lenta, con golpes graves
+    "boss2": dict(vol=0.42, step=0.21, bw="saw", arp="saw", avol=0.08, bvol=0.22, bass="stomp",
+                  pat=[0, 0, 1, 0, 0, 1, 2, 1], kick="x...x.x.", snare="....x...", metal="x.......",
+                  prog=[("D2", ["D3", "A3", "D4"]), ("D#2", ["D#3", "A#3", "D#4"]), ("C2", ["C3", "G3", "C4"]), ("A1", ["A2", "E3", "A3"])]),
+    # BOSS 3 OJO DEL NUCLEO: misteriosa, arpegios agudos y eco
+    "boss3": dict(vol=0.36, step=0.14, bw="saw", arp="tri", avol=0.12, bvol=0.16, bass="off",
+                  pat=[0, 1, 2, 1, 2, 1, 0, 2], aoct=[2] * 8, kick="x.....x.", hat="x.x.x.x.", echo=(0.21, 0.35),
+                  prog=[("F#2", ["F#4", "A4", "C5"]), ("G2", ["G4", "A#4", "C#5"]), ("F#2", ["F#4", "A4", "C5"]), ("E2", ["E4", "G4", "A#4"])]),
+    # BOSS 4 CENTINELA GLACIAL: helada, campanitas y silencios
+    "boss4": dict(vol=0.36, step=0.17, bw="tri", arp="sin", avol=0.09, bvol=0.2, bass="long", pad=0.04,
+                  pat=[0, 1, 2, 2, 1, 0, 1, 2], aoct=[2] * 8, amask="x.x.xx.x", bell="x...x.x.", bellvol=0.08,
+                  kick="x.......", snare="....x...", hat=".x.x.x.x", echo=(0.3, 0.3),
+                  prog=[("G2", ["G4", "A#4", "D5"]), ("D#2", ["G4", "A#4", "D#5"]), ("C3", ["G4", "C5", "D#5"]), ("D3", ["F#4", "A4", "D5"])]),
+    # BOSS 5 REINA ENJAMBRE: zumbido rápido y desafinado
+    "boss5": dict(vol=0.38, step=0.11, bw="sq", arp="saw", avol=0.055, bvol=0.15, bass="pump", det=4.0,
+                  pat=[0, 1, 2, 1, 2, 1, 0, 1], aoct=[1, 2, 1, 2, 1, 2, 1, 2], kick="x.x.x.x.", snare="..x...x.", hat="xxxxxxxx", hatvol=0.025,
+                  prog=[("A2", ["A4", "A#4", "E5"]), ("A#2", ["A#4", "D5", "F5"]), ("A2", ["A4", "A#4", "E5"]), ("G2", ["G4", "A#4", "D5"])]),
+    # BOSS 6 CAZADOR DEL VACIO: oscura, grave, espaciosa
+    "boss6": dict(vol=0.38, step=0.2, bw="sin", arp="tri", avol=0.1, bvol=0.26, bass="long", pad=0.05, padoct=0.5,
+                  pat=[0, 1, 2, 0, 1, 2, 1, 0], aoct=[2] * 8, amask="x..x.x..", kick="x.....x.", metal="......x.",
+                  echo=(0.5, 0.45),
+                  prog=[("C#2", ["C#4", "E4", "G#4"]), ("A1", ["A3", "C#4", "E4"]), ("B1", ["B3", "D#4", "F#4"]), ("G#1", ["G#3", "B3", "D#4"])]),
+    # BOSS 7 ARCHI-REACTOR: industrial, mecánica
+    "boss7": dict(vol=0.40, step=0.13, bw="sq", arp="sq", avol=0.06, bvol=0.2, bass="pump",
+                  pat=[0, 0, 1, 0, 0, 2, 1, 2], aoct=[1, 1, 2, 1, 1, 2, 1, 2], amask="xx.xx.x.", kick="x.x.x.x.", snare="..x...x.",
+                  hat="x.xxx.xx", metal="x...x...",
+                  prog=[("B1", ["B3", "D4", "F#4"]), ("G2", ["G3", "B3", "D4"]), ("D2", ["D4", "F#4", "A4"]), ("A1", ["A3", "C#4", "E4"])]),
+    # BOSS 8 EMPERADOR GALACTICO: épica, grandiosa (Re menor armónico), la más larga
+    "boss8": dict(vol=0.42, step=0.14, bw="sq", arp="saw", avol=0.065, bvol=0.2, bass="pump", pad=0.04,
+                  pat=[0, 1, 2, 1, 0, 2, 1, 2], aoct=[1, 2, 1, 2, 1, 2, 2, 1], kick="x.x.x.x.", snare="....x...", hat="xxxxxxxx", hatvol=0.03,
+                  metal="x.......", bell="x...x...", bellvol=0.06, echo=(0.28, 0.3),
+                  prog=[("D2", ["D4", "F4", "A4"]), ("A#1", ["A#3", "D4", "F4"]), ("G2", ["G3", "A#3", "D4"]),
+                        ("A2", ["A3", "C#4", "E4"]), ("D2", ["D4", "F4", "A4"]), ("A2", ["A3", "C#4", "E4"])]),
+}
+BUILD_ORDER = ["menu", "select", "game"] + ["boss%d" % i for i in range(1, 9)]
+
+
+def _track_gen(key):
+    """Construye una pista POCO A POCO (generador): el juego la va sintetizando entre cuadros sin trabarse."""
+    sp = TRACKS[key]
+    step, prog = sp["step"], sp["prog"]
+    pat = sp.get("pat", [0, 1, 2, 1, 0, 1, 2, 2])
+    aw, bw = _WAVES[sp.get("arp", "tri")], _WAVES[sp.get("bw", "sq")]
+    amask, aoct = sp.get("amask", "xxxxxxxx"), sp.get("aoct", [1] * 8)
+    avol, bvol, det = sp.get("avol", 0.1), sp.get("bvol", 0.18), sp.get("det", 0.0)
+    bass = sp.get("bass", "eighth")
+    kick, snare = sp.get("kick", "........"), sp.get("snare", "........")
+    hat, metal, bell = sp.get("hat", "........"), sp.get("metal", "........"), sp.get("bell", "........")
+    spc = 8
+    buf = [0.0] * int(len(prog) * spc * step * SR)
+    for c, (root, chord) in enumerate(prog):
+        rf, cf = nf(root), [nf(x) for x in chord]
+        bt = c * spc * step
+        if sp.get("pad"):
+            for f in cf:
+                yield from _pad_gen(buf, bt, spc * step * 1.02, f * sp.get("padoct", 1.0), sp["pad"])
+        if bass == "long":
+            yield from _note_gen(buf, bt, spc * step * 0.98, rf, bvol, bw, 0.6)
+        for k in range(spc):
+            t0 = bt + k * step
+            if bass == "pump" or (bass == "eighth" and k % 2 == 0) or (bass == "stomp" and k in (0, 3, 4, 7)) \
+                    or (bass == "off" and k in (0, 3, 6)):
+                yield from _note_gen(buf, t0, step * 0.9, rf, bvol, bw, 1.0)
+            if amask[k] == "x":
+                f = cf[pat[k]] * aoct[k]
+                yield from _note_gen(buf, t0, step * 0.95, f, avol, aw, 1.4)
+                if det:
+                    yield from _note_gen(buf, t0, step * 0.95, f + det, avol, aw, 1.4)
+            if bell[k] == "x":
+                yield from _note_gen(buf, t0, step * 3.0, cf[(k + c) % 3] * 2.0, sp.get("bellvol", 0.06), _sin, 2.2)
+            if kick[k] == "x":
+                _kick(buf, t0, 0.45)
+                yield
+            if snare[k] == "x":
+                _snare(buf, t0, 0.12)
+                yield
+            if hat[k] == "x":
+                _hat(buf, t0, sp.get("hatvol", 0.04))
+            if metal[k] == "x":
+                _clang(buf, t0, 0.09)
+            yield
+    ec = sp.get("echo")
+    if ec:
+        d, fb = int(ec[0] * SR), ec[1]
+        for i in range(d, len(buf)):
+            buf[i] += buf[i - d] * fb
+            if i % 6000 == 0:
+                yield
+    pk = 0.0
+    for i in range(0, len(buf), 20000):
+        pk = max(pk, max(map(abs, buf[i:i + 20000])))
+        yield
+    k = 0.95 / pk if pk > 0.95 else 1.0
+    ints = array('h')
+    for i in range(0, len(buf), 12000):
+        ints.extend([int(max(-1.0, min(1.0, v * k)) * 30000) for v in buf[i:i + 12000]])
+        yield
+    if CH == 2:
+        st = array('h', [0]) * (len(ints) * 2)
+        st[0::2] = ints
+        st[1::2] = ints
+        ints = st
+    return pygame.mixer.Sound(buffer=ints.tobytes())
 
 
 SFX = {}
+SFX_BASE = {}
 MUSIC = {}
 music_ch = None
-music_now = "__none__"
+music_now = None         # pista que suena ahora
+music_want = None        # pista que se pidió (puede estar construyéndose todavía)
+_gens = {}
+
+
+def apply_sfx_volume():
+    for k, s in SFX.items():
+        try:
+            s.set_volume(SFX_BASE.get(k, 1.0) * sfx_vol)
+        except Exception:
+            pass
+
+
+def apply_music_volume():
+    if music_ch is not None and music_now in TRACKS:
+        try:
+            music_ch.set_volume(TRACKS[music_now]["vol"] * music_vol)
+        except Exception:
+            pass
 
 
 def init_audio():
@@ -469,8 +720,9 @@ def init_audio():
         S["victory"] = to_sound(seq(tone(0.14, 523, None, _sq, 0.3, 0.8), tone(0.14, 659, None, _sq, 0.3, 0.8),
                                     tone(0.14, 784, None, _sq, 0.3, 0.8), tone(0.14, 1047, None, _sq, 0.3, 0.8),
                                     tone(0.14, 784, None, _sq, 0.3, 0.8), tone(0.6, 1047, None, _sq, 0.3, 1.0)), 0.8)
-        MUSIC["calm"] = to_sound(build_music(False), 1.0)
-        MUSIC["boss"] = to_sound(build_music(True), 1.0)
+        for _k, _s in S.items():
+            SFX_BASE[_k] = _s.get_volume()
+        apply_sfx_volume()
     except Exception:
         SFX.clear()
         MUSIC.clear()
@@ -485,22 +737,76 @@ def play(name):
             pass
 
 
-def set_music(name):
-    """name: 'menu' | 'game' | 'boss' | None"""
+def _apply_music():
     global music_now
-    if music_ch is None or name == music_now:
+    if music_ch is None:
         return
-    music_now = name
+    want = music_want
     try:
-        if name is None:
-            music_ch.stop()
+        if want is None:
+            if music_now is not None:
+                music_ch.stop()
+                music_now = None
             return
-        track, vol = {"menu": ("calm", 0.22), "game": ("calm", 0.38), "boss": ("boss", 0.45)}[name]
-        if track in MUSIC:
-            music_ch.set_volume(vol)
-            music_ch.play(MUSIC[track], loops=-1)
+        if want in MUSIC:
+            tgt = want
+        elif music_now is None:                  # aún no está lista: mientras tanto suena otra que sí lo esté
+            tgt = next((k for k in ("game", "menu", "select") if k in MUSIC), None)
+        else:
+            return
+        if tgt is None or tgt == music_now:
+            return
+        music_now = tgt
+        music_ch.set_volume(TRACKS[tgt]["vol"] * music_vol)
+        music_ch.play(MUSIC[tgt], loops=-1)
     except Exception:
         pass
+
+
+def set_music(name):
+    """name: 'menu' | 'select' | 'game' | 'boss1'..'boss8' | None"""
+    global music_want
+    music_want = name
+    _apply_music()
+
+
+def music_tick():
+    """Cada cuadro avanza un poquito la síntesis de la música que falta (primero la pedida, luego el resto)."""
+    if music_ch is None or not AUDIO:
+        return
+    key = music_want if (music_want in TRACKS and music_want not in MUSIC) else None
+    if key is None:
+        key = next((k for k in BUILD_ORDER if k not in MUSIC), None)
+    if key is None:
+        return
+    g = _gens.get(key)
+    if g is None:
+        g = _gens[key] = _track_gen(key)
+    quiet = game_state != "PLAYING"
+    fps = clock.get_fps()
+    budget = 0.010 if quiet else (0.004 if (fps == 0 or fps >= 50) else 0.0015)
+    t0 = time.perf_counter()
+    try:
+        while time.perf_counter() - t0 < budget:
+            next(g)
+    except StopIteration as e:
+        try:
+            MUSIC[key] = e.value
+        except Exception:
+            MUSIC[key] = None
+        _gens.pop(key, None)
+        if MUSIC.get(key) is None:
+            MUSIC.pop(key, None)
+            TRACKS.pop(key, None)
+            if key in BUILD_ORDER:
+                BUILD_ORDER.remove(key)
+        else:
+            _apply_music()
+    except Exception:
+        _gens.pop(key, None)
+        TRACKS.pop(key, None)
+        if key in BUILD_ORDER:
+            BUILD_ORDER.remove(key)
 
 
 def music_pause(flag):
@@ -2191,7 +2497,7 @@ class Boss:
             if self.y >= self.target_y:
                 self.y = self.target_y
                 self.state = "FIGHT"
-                set_music("boss")
+                set_music("boss%d" % self.idx)
 
         elif self.state == "FIGHT":
             ratio = self.hp / float(self.max_hp)
@@ -3095,7 +3401,174 @@ btn_del_no = ModernButton(WIDTH // 2 + int(WIDTH * 0.13), int(HEIGHT * 0.62), in
 btn_map_prev = ModernButton(int(WIDTH * 0.045), int(HEIGHT * 0.5), int(WIDTH * 0.06), int(HEIGHT * 0.12), "<")
 btn_map_next = ModernButton(int(WIDTH * 0.955), int(HEIGHT * 0.5), int(WIDTH * 0.06), int(HEIGHT * 0.12), ">")
 btn_map_back = ModernButton(int(WIDTH * 0.13), int(HEIGHT * 0.92), int(WIDTH * 0.2), int(HEIGHT * 0.08), "VOLVER")
-ALL_BUTTONS = (shoot_btn, nuke_btn, dash_btn, lock_btn, pause_btn, btn_infinite, btn_levels, btn_color, btn_shop, btn_shop_back, btn_rename,
+# ---- AJUSTES (engrane) y editor de controles ----
+btn_gear = ModernButton(WIDTH - 24, HEIGHT - 24, 36, 36, "", True)
+btn_set_back = ModernButton(WIDTH // 2, int(HEIGHT * 0.90), int(WIDTH * 0.34), BH, "VOLVER")
+btn_set_move = ModernButton(int(WIDTH * 0.30), int(HEIGHT * 0.72), int(WIDTH * 0.38), BH, "MOVER CONTROLES")
+btn_set_reset = ModernButton(int(WIDTH * 0.70), int(HEIGHT * 0.72), int(WIDTH * 0.38), BH, "RESTABLECER")
+btn_lay_done = ModernButton(WIDTH // 2, int(HEIGHT * 0.90), int(WIDTH * 0.2), BH, "LISTO")
+btn_lay_reset = ModernButton(WIDTH // 2, int(HEIGHT * 0.78), int(WIDTH * 0.26), BH, "RESTABLECER")
+preview_btn = ModernButton(0, 0, 40, 40, "", True)
+
+CTRL_NAMES = ["joy", "shoot", "nuke", "dash", "lock", "pause"]
+CTRL_OBJ = {"joy": joystick, "shoot": shoot_btn, "nuke": nuke_btn, "dash": dash_btn, "lock": lock_btn, "pause": pause_btn}
+
+
+def ctrl_center(name):
+    o = CTRL_OBJ[name]
+    return o.base_pos if name == "joy" else o.rect.center
+
+
+def ctrl_rect(name):
+    o = CTRL_OBJ[name]
+    if name == "joy":
+        r = int(o.radius)
+        return pygame.Rect(o.base_pos[0] - r, o.base_pos[1] - r, 2 * r, 2 * r)
+    return o.rect
+
+
+def ctrl_set(name, cx, cy):
+    cx = max(20, min(WIDTH - 20, int(cx)))
+    cy = max(20, min(HEIGHT - 20, int(cy)))
+    o = CTRL_OBJ[name]
+    if name == "joy":
+        o.base_pos = (cx, cy)
+        o.reset()
+    else:
+        o.rect.center = (cx, cy)
+
+
+def ctrl_hit(name, tx, ty):
+    o = CTRL_OBJ[name]
+    if name == "joy":
+        return math.hypot(tx - o.base_pos[0], ty - o.base_pos[1]) < o.radius * 1.2
+    return o.rect.inflate(18, 18).collidepoint(tx, ty)
+
+
+CTRL_DEFAULT = {n: (ctrl_center(n)[0] / float(WIDTH), ctrl_center(n)[1] / float(HEIGHT)) for n in CTRL_NAMES}
+ctrl_pos = {}            # posiciones personalizadas (fracción de la pantalla); vacío = las de fábrica
+ctrl_alpha = 1.0         # opacidad de los controles en partida (0.2 .. 1.0)
+
+
+def apply_ctrl_layout():
+    for n in CTRL_NAMES:
+        fx, fy = ctrl_pos.get(n, CTRL_DEFAULT[n])
+        ctrl_set(n, fx * WIDTH, fy * HEIGHT)
+
+
+def reset_ctrl_layout():
+    ctrl_pos.clear()
+    apply_ctrl_layout()
+
+
+def make_gear_icon(d):
+    s = pygame.Surface((d, d), pygame.SRCALPHA)
+    c = d / 2.0
+    r_out, r_in, teeth = d * 0.47, d * 0.34, 8
+    pts = []
+    for i in range(teeth):
+        a = 6.2832 * i / teeth
+        for da, rr in ((-0.30, r_in), (-0.19, r_out), (0.19, r_out), (0.30, r_in)):
+            pts.append((c + math.cos(a + da) * rr, c + math.sin(a + da) * rr))
+    pygame.draw.polygon(s, (215, 225, 245), pts)
+    pygame.draw.polygon(s, (90, 110, 150), pts, 1)
+    pygame.draw.circle(s, (34, 44, 70), (int(c), int(c)), int(d * 0.16))
+    pygame.draw.circle(s, (90, 110, 150), (int(c), int(c)), int(d * 0.16), 1)
+    return s
+
+
+GEAR_ICON = make_gear_icon(26)
+
+
+def draw_gear_button():
+    btn_gear.draw(canvas)
+    canvas.blit(GEAR_ICON, GEAR_ICON.get_rect(center=btn_gear.rect.center))
+
+
+class Slider:
+    def __init__(self, label, cx, y, w, value):
+        self.label = label
+        self.rect = pygame.Rect(0, 0, int(w), 12)
+        self.rect.midtop = (int(cx), int(y))
+        self.value = value
+        self.touch_id = None
+
+    def _set_from(self, tx):
+        self.value = max(0.0, min(1.0, (tx - self.rect.left) / float(self.rect.width)))
+
+    def process_event(self, e_type, tid, tx, ty):
+        """Devuelve 'change' mientras se arrastra, 'release' al soltar, o None."""
+        if e_type == 'down' and self.rect.inflate(26, 40).collidepoint(tx, ty):
+            self.touch_id = tid
+            self._set_from(tx)
+            return 'change'
+        if e_type == 'motion' and self.touch_id == tid:
+            self._set_from(tx)
+            return 'change'
+        if e_type == 'up' and self.touch_id == tid:
+            self.touch_id = None
+            return 'release'
+        return None
+
+    def draw(self, shown):
+        r = self.rect
+        canvas.blit(text_surf(font_medium, self.label, WHITE), (r.left, r.top - 22))
+        t = text_surf(font_medium, shown, YELLOW)
+        canvas.blit(t, (r.right - t.get_width(), r.top - 22))
+        pygame.draw.rect(canvas, (22, 24, 40), r)
+        fw = int(self.value * r.width)
+        if fw > 0:
+            pygame.draw.rect(canvas, (0, 170, 220), (r.left, r.top, fw, r.height))
+            pygame.draw.rect(canvas, (140, 235, 255), (r.left, r.top, fw, 2))
+        pygame.draw.rect(canvas, LIGHT_GRAY, r, 1)
+        kx = r.left + fw
+        pygame.draw.circle(canvas, (20, 30, 55), (kx, r.centery), 10)
+        pygame.draw.circle(canvas, WHITE if self.touch_id is not None else CYAN, (kx, r.centery), 8)
+        pygame.draw.circle(canvas, (20, 30, 55), (kx, r.centery), 3)
+
+
+_sl_w = int(WIDTH * 0.5)
+sl_music = Slider("MUSICA", WIDTH // 2, int(HEIGHT * 0.25), _sl_w, 1.0)
+sl_sfx = Slider("EFECTOS", WIDTH // 2, int(HEIGHT * 0.40), _sl_w, 1.0)
+sl_alpha = Slider("TRANSPARENCIA", WIDTH // 2, int(HEIGHT * 0.55), _sl_w, 1.0)
+
+
+def draw_control(fn, rect):
+    """Dibuja un control con la opacidad elegida en AJUSTES (copia el fondo, dibuja y mezcla)."""
+    if ctrl_alpha >= 0.98:
+        fn()
+        return
+    r = pygame.Rect(rect).inflate(52, 52).clip(canvas.get_rect())
+    if r.w <= 0 or r.h <= 0:
+        fn()
+        return
+    bg = canvas.subsurface(r).copy()
+    fn()
+    top = canvas.subsurface(r).copy()
+    top.set_alpha(int(255 * ctrl_alpha))
+    canvas.blit(bg, r.topleft)
+    canvas.blit(top, r.topleft)
+
+
+def draw_controls(nuke_p, dash_ready, dash_p, lock_on):
+    draw_control(lambda: joystick.draw(canvas), ctrl_rect("joy"))
+    draw_control(lambda: shoot_btn.draw(canvas), shoot_btn.rect)
+    draw_control(lambda: nuke_btn.draw(canvas, nuke_ready=(nuke_p >= 1.0), nuke_progress=nuke_p), nuke_btn.rect)
+    draw_control(lambda: pause_btn.draw(canvas), pause_btn.rect)
+    draw_control(lambda: dash_btn.draw(canvas, nuke_ready=dash_ready, nuke_progress=dash_p), dash_btn.rect)
+
+    def _lock():
+        lock_btn.active = lock_on
+        lock_btn.draw(canvas)
+        lc = YELLOW if lock_on else WHITE
+        lx, ly = lock_btn.rect.center
+        pygame.draw.line(canvas, lc, (lx - 7, ly), (lx + 7, ly), 2)
+        pygame.draw.line(canvas, lc, (lx, ly - 7), (lx, ly + 7), 2)
+    draw_control(_lock, lock_btn.rect)
+
+
+ALL_BUTTONS = (btn_gear, btn_set_back, btn_set_move, btn_set_reset, btn_lay_done, btn_lay_reset, preview_btn,
+               shoot_btn, nuke_btn, dash_btn, lock_btn, pause_btn, btn_infinite, btn_levels, btn_color, btn_shop, btn_shop_back, btn_rename,
                btn_resume, btn_menu, btn_retry, btn_menu_end, btn_name_ok, btn_color_ok, btn_name_del, btn_del_yes, btn_del_no,
                btn_map_prev, btn_map_next, btn_map_back)
 
@@ -3359,6 +3832,28 @@ def new_profile_data():
     return {"ship": 0, "progress": 0, "coins_q": 0, "upg": {u["key"]: 0 for u in UPGRADES}}
 
 
+def settings_dict():
+    return {"music": round(music_vol, 3), "sfx": round(sfx_vol, 3), "alpha": round(ctrl_alpha, 3),
+            "pos": {n: [round(v[0], 4), round(v[1], 4)] for n, v in ctrl_pos.items()}}
+
+
+def settings_apply(d):
+    global music_vol, sfx_vol, ctrl_alpha
+    try:
+        music_vol = max(0.0, min(1.0, float(d.get("music", 1.0))))
+        sfx_vol = max(0.0, min(1.0, float(d.get("sfx", 1.0))))
+        ctrl_alpha = max(0.2, min(1.0, float(d.get("alpha", 1.0))))
+        ctrl_pos.clear()
+        for n, v in dict(d.get("pos", {})).items():
+            if n in CTRL_NAMES:
+                ctrl_pos[n] = (max(0.0, min(1.0, float(v[0]))), max(0.0, min(1.0, float(v[1]))))
+    except Exception:
+        pass
+    apply_ctrl_layout()
+    apply_sfx_volume()
+    apply_music_volume()
+
+
 def save_game():
     """Guarda TODOS los perfiles; el activo se actualiza con el estado actual."""
     global coins_dirty
@@ -3368,7 +3863,7 @@ def save_game():
             profiles[player_name] = {"ship": ship_idx, "progress": progress,
                                      "coins_q": coins_q, "upg": dict(upg)}
         with open(SAVE_PATH, "w") as f:
-            json.dump({"last": player_name, "profiles": profiles}, f)
+            json.dump({"last": player_name, "profiles": profiles, "settings": settings_dict()}, f)
     except Exception:
         pass
 
@@ -3401,6 +3896,7 @@ def load_game():
                                "coins_q": d.get("coins_q", 0), "upg": d.get("upg", {})}}
         if last:
             load_profile(last)
+        settings_apply(d.get("settings", {}))
     except Exception:
         pass
 
@@ -3434,6 +3930,126 @@ def maybe_drop(x, y):
 
 # ---------- teclado en pantalla para el nombre ----------
 KEY_ROWS = ["1234567890", "QWERTYUIOP", "ASDFGHJKLÑ", "ZXCVBNM"]
+
+
+settings_return = "MENU"
+lay_drag = None          # (nombre, id del dedo) del control que se está arrastrando
+lay_off = (0, 0)
+
+
+def open_settings():
+    global game_state, settings_return
+    release_all()
+    settings_return = game_state
+    game_state = "SETTINGS"
+    sl_music.value, sl_sfx.value = music_vol, sfx_vol
+    sl_alpha.value = (ctrl_alpha - 0.2) / 0.8
+    if settings_return == "PAUSED":
+        music_pause(False)                 # para poder oír el volumen mientras se ajusta
+    play("click")
+
+
+def close_settings():
+    global game_state
+    release_all()
+    block_input()
+    save_game()
+    game_state = settings_return
+    if settings_return == "PAUSED":
+        music_pause(True)
+    play("click")
+
+
+def settings_touch(e_type, tid, tx, ty):
+    global music_vol, sfx_vol, ctrl_alpha, game_state, lay_drag
+    r = sl_music.process_event(e_type, tid, tx, ty)
+    if r:
+        music_vol = sl_music.value
+        apply_music_volume()
+        if r == 'release':
+            save_game()
+    r = sl_sfx.process_event(e_type, tid, tx, ty)
+    if r:
+        sfx_vol = sl_sfx.value
+        apply_sfx_volume()
+        if r == 'release':
+            play("orb")
+            save_game()
+    r = sl_alpha.process_event(e_type, tid, tx, ty)
+    if r:
+        ctrl_alpha = 0.2 + 0.8 * sl_alpha.value
+        if r == 'release':
+            save_game()
+    if btn_set_move.process_event(e_type, tid, tx, ty) and e_type == 'down' and ui_ok("smove"):
+        release_all()
+        lay_drag = None
+        game_state = "LAYOUT"
+        play("click")
+    if btn_set_reset.process_event(e_type, tid, tx, ty) and e_type == 'down' and ui_ok("sreset"):
+        reset_ctrl_layout()
+        ctrl_alpha = 1.0
+        sl_alpha.value = 1.0
+        save_game()
+        play("click")
+    if btn_set_back.process_event(e_type, tid, tx, ty) and e_type == 'down' and ui_ok("sbk"):
+        close_settings()
+
+
+def draw_settings():
+    draw_text(font_large, "AJUSTES", CYAN, WIDTH // 2, 4)
+    sl_music.draw("%d%%" % round(music_vol * 100))
+    sl_sfx.draw("%d%%" % round(sfx_vol * 100))
+    sl_alpha.draw("%d%%" % round(ctrl_alpha * 100))
+    preview_btn.rect.center = (sl_alpha.rect.right + 44, sl_alpha.rect.centery)
+    draw_control(lambda: preview_btn.draw(canvas), preview_btn.rect)
+    btn_set_move.draw(canvas)
+    btn_set_reset.draw(canvas)
+    btn_set_back.draw(canvas)
+
+
+def layout_touch(e_type, tid, tx, ty):
+    global lay_drag, lay_off, game_state
+    done = btn_lay_done.process_event(e_type, tid, tx, ty)
+    rst = btn_lay_reset.process_event(e_type, tid, tx, ty)
+    if done and e_type == 'down' and ui_ok("ldone"):
+        lay_drag = None
+        save_game()
+        game_state = "SETTINGS"
+        play("click")
+        return
+    if rst and e_type == 'down' and ui_ok("lreset"):
+        lay_drag = None
+        reset_ctrl_layout()
+        save_game()
+        play("click")
+        return
+    if e_type == 'down' and lay_drag is None and not done and not rst:
+        for n in reversed(CTRL_NAMES):
+            if ctrl_hit(n, tx, ty):
+                cx, cy = ctrl_center(n)
+                lay_drag = (n, tid)
+                lay_off = (cx - tx, cy - ty)
+                break
+    elif e_type == 'motion' and lay_drag is not None and lay_drag[1] == tid:
+        ctrl_set(lay_drag[0], tx + lay_off[0], ty + lay_off[1])
+    elif e_type == 'up' and lay_drag is not None and lay_drag[1] == tid:
+        cx, cy = ctrl_center(lay_drag[0])
+        ctrl_pos[lay_drag[0]] = (cx / float(WIDTH), cy / float(HEIGHT))
+        lay_drag = None
+        save_game()
+
+
+def draw_layout():
+    canvas.blit(dark_surf, (0, 0))
+    draw_text(font_large, "MOVER CONTROLES", CYAN, WIDTH // 2, 4)
+    draw_text(font_small, "Arrastra cada control hasta donde te acomode", LIGHT_GRAY, WIDTH // 2, int(HEIGHT * 0.14))
+    for n in CTRL_NAMES:
+        pygame.draw.rect(canvas, (70, 80, 110), ctrl_rect(n).inflate(8, 8), 1)
+    draw_controls(0.6, True, 1.0, False)
+    if lay_drag is not None:
+        pygame.draw.rect(canvas, YELLOW, ctrl_rect(lay_drag[0]).inflate(12, 12), 2)
+    btn_lay_reset.draw(canvas)
+    btn_lay_done.draw(canvas)
 
 
 def build_name_keys():
@@ -3481,6 +4097,7 @@ def open_shop():
     global game_state
     release_all()
     game_state = "SHOP"
+    set_music("select")
     play("click")
 
 
@@ -3488,6 +4105,7 @@ def open_color():
     global game_state
     release_all()
     game_state = "COLOR"
+    set_music("select")
     play("click")
 
 
@@ -3496,6 +4114,7 @@ def open_map():
     release_all()
     map_sec = min(SECTORS - 1, progress // LEVELS_PER_SECTOR)
     game_state = "MAP"
+    set_music("select")
     play("click")
 
 
@@ -3825,7 +4444,6 @@ def finish_node():
     else:
         pygame.time.set_timer(ENEMY_SPAWN, 0)
         open_map()
-        set_music("menu")
 
 
 def map_touch(e_type, tid, tx, ty):
@@ -3927,31 +4545,35 @@ def draw_map():
 
 
 load_game()
+apply_ctrl_layout()
+apply_sfx_volume()
+apply_music_volume()
 name_buf = player_name
 
 
-_fast_scale = True
-
-
 def present():
-    global _fast_scale, shake_t
+    global shake_t
+    update_view()
+    vx, vy, vw, vh = VIEW
     if shake_t > 0:
         amp = min(5, 1 + shake_t // 3)
-        k = SW / float(WIDTH)
+        k = vw / float(WIDTH)
         ox = int(random.randint(-amp, amp) * k)
         oy = int(random.randint(-amp, amp) * k)
         shake_t -= 1
         screen.fill((0, 0, 0))
-        screen.blit(pygame.transform.scale(canvas, (SW, SH)), (ox, oy))
+        screen.blit(pygame.transform.scale(canvas, (vw, vh)), (vx + ox, vy + oy))
         pygame.display.flip()
         return
-    if _fast_scale:
-        try:
-            pygame.transform.scale(canvas, (SW, SH), screen)
-        except Exception:
-            _fast_scale = False
-    if not _fast_scale:
-        screen.blit(pygame.transform.scale(canvas, (SW, SH)), (0, 0))
+    try:
+        if vw == SW and vh == SH:
+            pygame.transform.scale(canvas, (vw, vh), screen)
+        else:
+            screen.fill((0, 0, 0))
+            pygame.transform.scale(canvas, (vw, vh), screen.subsurface((vx, vy, vw, vh)))
+    except Exception:
+        screen.fill((0, 0, 0))
+        screen.blit(pygame.transform.scale(canvas, (vw, vh)), (vx, vy))
     pygame.display.flip()
 
 
@@ -3991,13 +4613,11 @@ while running:
                             pygame.MOUSEBUTTONDOWN, pygame.MOUSEMOTION, pygame.MOUSEBUTTONUP):
 
             if hasattr(event, 'finger_id'):
-                tx = event.x * WIDTH
-                ty = event.y * HEIGHT
+                tx, ty = view_to_canvas(event.x * SW, event.y * SH)
                 tid = event.finger_id
                 e_type = 'down' if event.type == pygame.FINGERDOWN else 'up' if event.type == pygame.FINGERUP else 'motion'
             else:
-                tx = event.pos[0] * MOUSE_K
-                ty = event.pos[1] * MOUSE_K
+                tx, ty = view_to_canvas(event.pos[0], event.pos[1])
                 tid = 'mouse'
                 e_type = 'down' if event.type == pygame.MOUSEBUTTONDOWN else 'up' if event.type == pygame.MOUSEBUTTONUP else 'motion'
                 if e_type == 'motion' and not pygame.mouse.get_pressed()[0]:
@@ -4022,6 +4642,8 @@ while running:
                 elif btn_rename.process_event(e_type, tid, tx, ty) and e_type == 'down':
                     play("click")
                     open_name()
+                elif btn_gear.process_event(e_type, tid, tx, ty) and e_type == 'down' and ui_ok("gear"):
+                    open_settings()
 
             elif game_state == "COLOR":
                 color_touch(e_type, tid, tx, ty)
@@ -4031,6 +4653,12 @@ while running:
 
             elif game_state == "MAP":
                 map_touch(e_type, tid, tx, ty)
+
+            elif game_state == "SETTINGS":
+                settings_touch(e_type, tid, tx, ty)
+
+            elif game_state == "LAYOUT":
+                layout_touch(e_type, tid, tx, ty)
 
             elif game_state == "PLAYING":
                 joystick.process_event(e_type, tid, tx, ty)
@@ -4062,6 +4690,8 @@ while running:
                     pygame.time.set_timer(ENEMY_SPAWN, 0)
                     play("click")
                     save_game()
+                elif btn_gear.process_event(e_type, tid, tx, ty) and e_type == 'down' and ui_ok("gearp"):
+                    open_settings()
 
             elif game_state in ("GAMEOVER", "VICTORY"):
                 if game_state == "GAMEOVER" and game_mode == "LEVELS" and \
@@ -4394,6 +5024,12 @@ while running:
     elif game_state == "MAP":
         draw_map()
 
+    elif game_state == "SETTINGS":
+        draw_settings()
+
+    elif game_state == "LAYOUT":
+        draw_layout()
+
     elif game_state == "MENU":
         if vg_on:
             canvas.blit(vg_hills, (0, HEIGHT - vg_hills.get_height()))
@@ -4410,6 +5046,7 @@ while running:
         btn_levels.draw(canvas)
         btn_shop.draw(canvas)
         btn_rename.draw(canvas)
+        draw_gear_button()
         oc = btn_color.rect.center
         canvas.blit(COLOR_ORB, COLOR_ORB.get_rect(center=oc))
         pygame.draw.circle(canvas, WHITE, oc, 16 + (frame // 20) % 2, 1)
@@ -4509,19 +5146,8 @@ while running:
             canvas.blit(text_surf(font_medium, coins_text(coins_q), YELLOW), (25, 38))
 
         if game_state == "PLAYING":
-            joystick.draw(canvas)
-            shoot_btn.draw(canvas)
-            nuke_progress = player.nuke_xp / float(player.max_nuke_xp)
-            nuke_btn.draw(canvas, nuke_ready=(nuke_progress >= 1.0), nuke_progress=nuke_progress)
-            pause_btn.draw(canvas)
-            dash_btn.draw(canvas, nuke_ready=(player.dash_cd == 0),
-                          nuke_progress=1.0 - player.dash_cd / float(player.dash_max))
-            lock_btn.active = aim_lock
-            lock_btn.draw(canvas)
-            lc = YELLOW if aim_lock else WHITE
-            lx, ly = lock_btn.rect.center
-            pygame.draw.line(canvas, lc, (lx - 7, ly), (lx + 7, ly), 2)
-            pygame.draw.line(canvas, lc, (lx, ly - 7), (lx, ly + 7), 2)
+            draw_controls(player.nuke_xp / float(player.max_nuke_xp), player.dash_cd == 0,
+                          1.0 - player.dash_cd / float(player.dash_max), aim_lock)
 
         if flash_timer > 0:
             flash_surf.set_alpha(flash_timer * 12)
@@ -4543,6 +5169,7 @@ while running:
             draw_text(font_title, "PAUSA", WHITE, WIDTH // 2, HEIGHT // 4 - 10)
             btn_resume.draw(canvas)
             btn_menu.draw(canvas)
+            draw_gear_button()
 
     elif game_state in ("GAMEOVER", "VICTORY"):
         if game_state == "GAMEOVER":
@@ -4557,6 +5184,7 @@ while running:
             btn_retry.draw(canvas)
         btn_menu_end.draw(canvas)
 
+    music_tick()
     present()
     clock.tick(60)
 
