@@ -7,7 +7,7 @@ source.include_exts = py,png
 version = 1.12.6
 icon.filename = %(source.dir)s/icon.png
 presplash.filename = %(source.dir)s/presplash.png
-presplash.color = #070616
+presplash.color = #122021
 requirements = hostpython3==3.10.12,python3==3.10.12,pygame
 orientation = landscape
 fullscreen = 1
