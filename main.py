@@ -91,7 +91,7 @@ else:
 # ---- PANTALLA DE CARGA animada (archivo loading.py junto a main.py; si no está, el juego arranca igual) ----
 try:
     import loading as _loading
-    _LS = _loading.LoadingScreen("ATTACK ON THE ALIENS", screen)
+    _LS = _loading.LoadingScreen("Geeckz", screen)
 except Exception:
     _LS = None
 
@@ -1032,25 +1032,60 @@ SHIP_COLORS = [
     ("DORADO", (220, 180, 40), (200, 50, 50), (255, 245, 170)),
     ("ESTELAR", (30, 70, 160), (240, 200, 40), (250, 230, 90)),
     ("NOCHE ESTRELLADA", (40, 80, 190), (250, 215, 90), (255, 245, 170)),   # activa el diseño especial
+    ("NUBE", (150, 205, 247), (255, 165, 200), (255, 236, 150)),            # nave nube con efectos pastel
 ]
-VG_IDX = len(SHIP_COLORS) - 1
+VG_IDX = 8
+CL_IDX = 9
+
+# --- Nave NUBE (diseño propio: nubecita con orejas-ala, mejillas rosas y estela de nubes) ---
+CLOUD_PAL = {'W': (250, 252, 255), 'L': (205, 230, 252), 'S': (150, 205, 247), 'D': (96, 156, 222),
+             'P': (255, 165, 200), 'K': (44, 52, 120), 'E': (255, 255, 255), 'Y': (255, 236, 150),
+             'C': (170, 240, 255), 'O': (255, 190, 225)}
+CLOUD_BODY = [
+    ".......W",
+    "......WW",
+    ".....WWW",
+    "..WWWWWW",
+    ".SWWWWWW",
+    "SSWWEKWW",
+    "SDSWKKWW",
+    "SDSPWWKW",
+    "SDSLWWWW",
+    ".SDSWWWW",
+    ".SDSLWWW",
+    "..SSWWWW",
+    "...LWWWW",
+    "....LLWW",
+]
+CLOUD_A = CLOUD_BODY + [".......Y"]
+CLOUD_B = CLOUD_BODY + [".......C", ".......O"]
+CLOUD_PROJ = ["..W", "..W", "WWY", "..W", "..W"]            # trazadora: estrellita en cruz
+CLOUD_PROJ_PAL = {'W': (255, 255, 255), 'Y': (255, 236, 150)}
+CL_PASTEL = [(255, 200, 225), (190, 225, 255), (255, 245, 190), (205, 255, 225), (225, 205, 255)]
+cl_on = False
 ship_idx = 0
 SHIP_BIG = None
 SHIP_ICON = None
 
 
 def apply_ship_color(idx):
-    global PLAYER_SPR, PROJ_SPR, ship_idx, SHIP_BIG, SHIP_ICON, vg_on
+    global PLAYER_SPR, PROJ_SPR, ship_idx, SHIP_BIG, SHIP_ICON, vg_on, cl_on
     ship_idx = idx % len(SHIP_COLORS)
     vg_on = (ship_idx == VG_IDX)          # el diseño de Van Gogh es solo un color más
+    cl_on = (ship_idx == CL_IDX)          # la nave NUBE tiene su propio diseño y efectos
     nm, cb, cr, cc = SHIP_COLORS[ship_idx]
-    pal = dict(PLAYER_PAL)
-    pal['B'], pal['R'], pal['C'] = cb, cr, cc
-    PLAYER_SPR = [Sprite(make_surface(PLAYER_A, pal, (12, 10, 30))),
-                  Sprite(make_surface(PLAYER_B, pal, (12, 10, 30)))]
-    pp = dict(PP)
-    pp['C'] = cc
-    PROJ_SPR = Sprite(make_surface(PROJ_MAT, pp, shade(cc, 0.35), "", 1))
+    if cl_on:
+        PLAYER_SPR = [Sprite(make_surface(CLOUD_A, CLOUD_PAL, (40, 60, 110), "KEPYCO")),
+                      Sprite(make_surface(CLOUD_B, CLOUD_PAL, (40, 60, 110), "KEPYCO"))]
+        PROJ_SPR = Sprite(make_surface(CLOUD_PROJ, CLOUD_PROJ_PAL, (255, 150, 200), "WY", 1))
+    else:
+        pal = dict(PLAYER_PAL)
+        pal['B'], pal['R'], pal['C'] = cb, cr, cc
+        PLAYER_SPR = [Sprite(make_surface(PLAYER_A, pal, (12, 10, 30))),
+                      Sprite(make_surface(PLAYER_B, pal, (12, 10, 30)))]
+        pp = dict(PP)
+        pp['C'] = cc
+        PROJ_SPR = Sprite(make_surface(PROJ_MAT, pp, shade(cc, 0.35), "", 1))
     base = PLAYER_SPR[0].base
     SHIP_BIG = pygame.transform.scale(base, (base.get_width() * 3, base.get_height() * 3))
     SHIP_ICON = pygame.transform.scale(base, (int(base.get_width() * 0.75), int(base.get_height() * 0.75)))
@@ -2160,7 +2195,7 @@ class Player:
         self.y = max(hh, min(HEIGHT - hh, self.y))
         self.rect.centerx = int(self.x)
         self.rect.centery = int(self.y)
-        if vg_on:
+        if vg_on or cl_on:
             self.trail.append((self.x, self.y))
             del self.trail[:-14]
 
@@ -2181,10 +2216,20 @@ class Player:
             elif self.dash_timer > 0:
                 fcol = (110, 220, 255)
             else:
-                fcol = (110, 150, 250) if vg_on else (60, 170, 255)
+                fcol = (110, 150, 250) if vg_on else ((255, 175, 220) if cl_on else (60, 170, 255))
             gr = 24 if self.dash_timer > 0 else (16 if (frame // 3) % 2 == 0 else 14)
             add_glow(surface, self.x - face[0] * self.rect.height * 0.42, self.y - face[1] * self.rect.height * 0.42,
                      fcol, gr, 0.9, 1)
+            if cl_on:
+                n = len(self.trail)
+                for i, (tx, ty) in enumerate(self.trail):          # estela de nubecitas que se van apagando
+                    k = (i + 1) / float(n)
+                    rr = int(1.5 + (1.0 - k) * 4)
+                    base = lerp_col((255, 255, 255), CL_PASTEL[(i + frame // 6) % 5], 0.55)
+                    pygame.draw.circle(surface, shade(base, 0.2 + 0.8 * k), (int(tx), int(ty)), rr)
+                    if i % 4 == 0:
+                        add_glow(surface, tx, ty, CL_PASTEL[(i + frame // 6) % 5], 8, 0.35 * k, 2)
+                add_glow(surface, self.x, self.y, (255, 190, 225), 22 + 2 * ((frame // 6) % 2), 0.4, 2)
             if vg_on:
                 n = len(self.trail)
                 if QUALITY >= 1 and n > 2:             # estela trenzada de pinceladas azul y amarilla
@@ -2212,6 +2257,17 @@ class Player:
                     pygame.draw.rect(surface, c, (sx_ - 1, sy_ - 1, 3, 3))
                     pygame.draw.rect(surface, (255, 255, 230), (sx_, sy_, 1, 1))
                     add_glow(surface, sx_, sy_, c, 6, 0.6, 2)
+            if cl_on:                                   # estrellitas pastel que titilan alrededor
+                for k in range(3):
+                    a = frame * 0.08 + k * 2.094
+                    rr = 15 + 2 * math.sin(frame * 0.06 + k * 2)
+                    sx_, sy_ = int(self.x + math.cos(a) * rr), int(self.y + math.sin(a) * rr * 0.85)
+                    sz = 1 + (frame // 5 + k) % 3
+                    c = CL_PASTEL[(k + frame // 20) % 5]
+                    pygame.draw.line(surface, c, (sx_ - sz, sy_), (sx_ + sz, sy_))
+                    pygame.draw.line(surface, c, (sx_, sy_ - sz), (sx_, sy_ + sz))
+                    pygame.draw.rect(surface, (255, 255, 255), (sx_, sy_, 1, 1))
+                    add_glow(surface, sx_, sy_, c, 6, 0.5, 2)
         if self.shield:
             sh = SHIELD_VG if vg_on else SHIELD_IMG
             add_glow(surface, self.x, self.y, (250, 215, 90) if vg_on else (60, 140, 255), 30, 0.5, 2)
@@ -2247,7 +2303,7 @@ class Projectile:
 
     def update(self):
         self.trail.append((self.x, self.y))
-        if len(self.trail) > TRAIL_LEN:
+        if len(self.trail) > TRAIL_LEN + (4 if cl_on else 0):
             del self.trail[0]
         self.age += 1
         self.x += self.dx
@@ -2262,7 +2318,19 @@ class Projectile:
         pts = self.trail + [(self.x, self.y)]
         n = len(pts)
         if n >= 2:
-            if vg_on and QUALITY >= 1:
+            if cl_on:
+                # estela arcoíris pastel: los colores se alternan, se desvanecen y sueltan chispitas
+                prev = None
+                for i, (tx, ty) in enumerate(pts):
+                    k = (i + 1) / float(n)
+                    cur = (int(tx), int(ty))
+                    if prev is not None:
+                        c = shade(lerp_col((255, 255, 255), CL_PASTEL[(i + self.age // 3) % 5], 0.65), 0.2 + 0.8 * k)
+                        pygame.draw.line(surface, c, prev, cur, 3 if k > 0.6 else 2)
+                    if QUALITY >= 1 and i % 3 == (self.age // 2) % 3:
+                        pygame.draw.rect(surface, (255, 255, 255), (cur[0] + (i % 2) * 3 - 1, cur[1] + ((i // 2) % 2) * 3 - 1, 1, 1))
+                    prev = cur
+            elif vg_on and QUALITY >= 1:
                 # dos hebras (azul y amarilla) trenzadas como las pinceladas del cielo
                 pa = pb = None
                 for i, (tx, ty) in enumerate(pts):
@@ -2287,8 +2355,13 @@ class Projectile:
                     if prev is not None:
                         pygame.draw.line(surface, shade(self.tc, 0.15 + 0.85 * k), prev, cur, 2 if k > 0.5 else 1)
                     prev = cur
-        add_glow(surface, self.x, self.y, (255, 220, 90) if vg_on else self.tc, 14, 0.9, 1)
+        add_glow(surface, self.x, self.y, (255, 220, 90) if vg_on else ((255, 205, 235) if cl_on else self.tc), 14, 0.9, 1)
         surface.blit(self.image, self.rect)
+        if cl_on:                                       # destello en cruz que pulsa en la punta
+            sz = 3 + (self.age // 3) % 2
+            hx, hy = int(self.x), int(self.y)
+            pygame.draw.line(surface, (255, 255, 255), (hx - sz, hy), (hx + sz, hy))
+            pygame.draw.line(surface, (255, 255, 255), (hx, hy - sz), (hx, hy + sz))
 
 
 class Enemy:
@@ -3915,7 +3988,24 @@ try:
     _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 except Exception:
     _BASE_DIR = os.getcwd()
-SAVE_PATH = os.path.join(_BASE_DIR, "conturboll_save.json")
+
+
+def _pick_save_dir():
+    """En Android la carpeta del juego (files/app) se BORRA en cada actualización del APK.
+    Su carpeta padre (files) NO se borra, así que el progreso se guarda ahí."""
+    try:
+        priv = os.environ.get("ANDROID_PRIVATE")
+        if priv and os.path.isdir(priv):
+            return priv
+    except Exception:
+        pass
+    if os.path.basename(_BASE_DIR) == "app" and os.path.basename(os.path.dirname(_BASE_DIR)) == "files":
+        return os.path.dirname(_BASE_DIR)
+    return _BASE_DIR
+
+
+SAVE_PATH = os.path.join(_pick_save_dir(), "conturboll_save.json")
+OLD_SAVE_PATH = os.path.join(_BASE_DIR, "conturboll_save.json")      # ubicación de versiones anteriores
 
 NAME_MAX = 10
 player_name = ""
@@ -3974,8 +4064,10 @@ def save_game():
         if player_name:
             profiles[player_name] = {"ship": ship_idx, "progress": progress,
                                      "coins_q": coins_q, "upg": dict(upg), "lore": sorted(lore_seen), "pv": 2}
-        with open(SAVE_PATH, "w") as f:
+        tmp = SAVE_PATH + ".tmp"
+        with open(tmp, "w") as f:
             json.dump({"last": player_name, "profiles": profiles, "settings": settings_dict()}, f)
+        os.replace(tmp, SAVE_PATH)
     except Exception:
         pass
 
@@ -4015,7 +4107,7 @@ def load_profile(name):
 def load_game():
     global profiles
     try:
-        with open(SAVE_PATH) as f:
+        with open(SAVE_PATH if os.path.exists(SAVE_PATH) else OLD_SAVE_PATH) as f:
             d = json.load(f)
         if "profiles" in d:
             profiles = dict(d["profiles"])
@@ -4536,6 +4628,15 @@ def draw_color():
         b0 = vg_ship_sprites()[(frame // 5) % 6][(frame // 4) % 2].base
         big = pygame.transform.scale(b0, (b0.get_width() * 3, b0.get_height() * 3))
         add_glow(canvas, WIDTH // 2, int(HEIGHT * 0.28) + bob, (250, 215, 90), 40, 0.4 + 0.1 * ((frame // 8) % 2), 1)
+    elif cl_on:
+        add_glow(canvas, WIDTH // 2, int(HEIGHT * 0.28) + bob, (255, 190, 225), 40, 0.4 + 0.1 * ((frame // 8) % 2), 1)
+        for k in range(4):
+            a = frame * 0.05 + k * 1.5708
+            sx_, sy_ = int(WIDTH // 2 + math.cos(a) * 40), int(HEIGHT * 0.28 + bob + math.sin(a) * 30)
+            c = CL_PASTEL[(k + frame // 20) % 5]
+            sz = 2 + (frame // 6 + k) % 3
+            pygame.draw.line(canvas, c, (sx_ - sz, sy_), (sx_ + sz, sy_))
+            pygame.draw.line(canvas, c, (sx_, sy_ - sz), (sx_, sy_ + sz))
     canvas.blit(big, big.get_rect(center=(WIDTH // 2, int(HEIGHT * 0.28) + bob)))
     for i, r in enumerate(SWATCHES):
         nm, cb, cr, cc = SHIP_COLORS[i]
@@ -4546,6 +4647,15 @@ def draw_color():
         if i == VG_IDX:
             canvas.blit(vg_swatch(r.w - 8, r.h - 8, (frame // 8) % 6), (r.left + 4, r.top + 4))
             pygame.draw.rect(canvas, (12, 10, 30), (r.left + 3, r.top + 3, r.w - 6, r.h - 6), 1)
+        elif i == CL_IDX:                                 # mini nubecita en el selector
+            cx_, cy_ = r.centerx, r.centery
+            for ox, oy, rr_ in ((-6, 2, 5), (0, -2, 7), (6, 2, 5)):
+                pygame.draw.circle(canvas, (255, 255, 255), (cx_ + ox, cy_ + oy), rr_)
+            pygame.draw.rect(canvas, (255, 255, 255), (cx_ - 6, cy_ + 2, 13, 5))
+            pygame.draw.rect(canvas, (44, 52, 120), (cx_ - 4, cy_, 2, 2))
+            pygame.draw.rect(canvas, (44, 52, 120), (cx_ + 3, cy_, 2, 2))
+            pygame.draw.rect(canvas, (255, 165, 200), (cx_ - 7, cy_ + 3, 2, 2))
+            pygame.draw.rect(canvas, (255, 165, 200), (cx_ + 6, cy_ + 3, 2, 2))
         else:
             pygame.draw.rect(canvas, cc, (r.centerx - 4, r.centery - 4, 8, 8))
             pygame.draw.rect(canvas, (12, 10, 30), (r.centerx - 4, r.centery - 4, 8, 8), 1)
