@@ -9,7 +9,8 @@ import time
 from array import array
 
 # =====================================================================
-#  ATTACK ON THE ALIENS  -  v1.13: pantalla que se adapta/centra en cualquier dispositivo, AJUSTES (engrane): volumen de música y
+#  ATTACK ON THE ALIENS  -  v1.14: LORE en el modo historia (prólogo, texto de cada sector, diálogo de cada boss, victorias y epílogo).
+#  (antes v1.13: pantalla que se adapta/centra en cualquier dispositivo, AJUSTES (engrane): volumen de música y
 #  efectos, transparencia y posición de los controles; música distinta para menú, selección, combate y cada BOSS.
 #  (antes v1.12.1: opción ELIMINAR perfil (con su progreso, monedas y mejoras) en la pantalla de perfil.
 #  (antes v1.12: HISTORIA con 8 sectores y 8 BOSSES distintos (dificultad creciente), INFINITO con boss al azar cada 50 puntos.
@@ -3567,7 +3568,8 @@ def draw_controls(nuke_p, dash_ready, dash_p, lock_on):
     draw_control(_lock, lock_btn.rect)
 
 
-ALL_BUTTONS = (btn_gear, btn_set_back, btn_set_move, btn_set_reset, btn_lay_done, btn_lay_reset, preview_btn,
+btn_story_skip = ModernButton(WIDTH - 46, 22, 80, 28, "SALTAR")
+ALL_BUTTONS = (btn_story_skip, btn_gear, btn_set_back, btn_set_move, btn_set_reset, btn_lay_done, btn_lay_reset, preview_btn,
                shoot_btn, nuke_btn, dash_btn, lock_btn, pause_btn, btn_infinite, btn_levels, btn_color, btn_shop, btn_shop_back, btn_rename,
                btn_resume, btn_menu, btn_retry, btn_menu_end, btn_name_ok, btn_color_ok, btn_name_del, btn_del_yes, btn_del_no,
                btn_map_prev, btn_map_next, btn_map_back)
@@ -3682,7 +3684,19 @@ def start_stage(i):
         boss = Boss(stage["idx"])
         pygame.time.set_timer(ENEMY_SPAWN, 0)
         set_music(None)
-        play("warning")
+        scenes = lore_scenes("bp", stage["idx"] - 1) if game_mode == "LEVELS" else []
+        if scenes:
+            save_game()
+
+            def _go():
+                global game_state
+                game_state = "PLAYING"
+                release_all()
+                set_music(None)
+                play("warning")
+            run_story(scenes, _go)
+        else:
+            play("warning")
 
 
 def find_target():
@@ -3828,8 +3842,11 @@ def block_input(ms=260):
     input_block_until = pygame.time.get_ticks() + ms
 
 
+lore_seen = set()        # fragmentos de historia ya mostrados a este perfil ('intro', 's0', 'bp0', 'bw0', 'end'...)
+
+
 def new_profile_data():
-    return {"ship": 0, "progress": 0, "coins_q": 0, "upg": {u["key"]: 0 for u in UPGRADES}}
+    return {"ship": 0, "progress": 0, "coins_q": 0, "upg": {u["key"]: 0 for u in UPGRADES}, "lore": []}
 
 
 def settings_dict():
@@ -3861,7 +3878,7 @@ def save_game():
     try:
         if player_name:
             profiles[player_name] = {"ship": ship_idx, "progress": progress,
-                                     "coins_q": coins_q, "upg": dict(upg)}
+                                     "coins_q": coins_q, "upg": dict(upg), "lore": sorted(lore_seen)}
         with open(SAVE_PATH, "w") as f:
             json.dump({"last": player_name, "profiles": profiles, "settings": settings_dict()}, f)
     except Exception:
@@ -3879,6 +3896,21 @@ def load_profile(name):
     for u in UPGRADES:
         upg[u["key"]] = max(0, min(len(u["cost"]), int(saved.get(u["key"], 0))))
     apply_ship_color(int(d.get("ship", 0)))
+    global lore_seen
+    if "lore" in d:
+        lore_seen = set(str(x) for x in d.get("lore", []))
+    else:                       # perfil de una versión anterior: no repetir lo que ya recorrió
+        lore_seen = set()
+        if progress > 0:
+            lore_seen.add("intro")
+            for s in range(min(SECTORS, progress // LEVELS_PER_SECTOR + 1)):
+                if s * LEVELS_PER_SECTOR < progress:
+                    lore_seen.add("s%d" % s)
+                if (s + 1) * LEVELS_PER_SECTOR <= progress:
+                    lore_seen.add("bp%d" % s)
+                    lore_seen.add("bw%d" % s)
+            if progress >= TOTAL_NODES:
+                lore_seen.add("end")
 
 
 def load_game():
@@ -4431,19 +4463,224 @@ def node_radius(i):
     return 20 if i == LEVELS_PER_SECTOR - 1 else 15
 
 
+# =====================================================================================================
+#  HISTORIA (LORE) del modo historia
+# =====================================================================================================
+LORE_INTRO = [
+    "Hace mil años, la Guardia Estelar velaba por las ocho regiones de la galaxia. Fue una era de paz y de luz.",
+    "Entonces despertó el Imperio Alien. En una sola noche cayeron las flotas, los puertos y los faros que guiaban a los viajeros.",
+    "Su soberano, el Emperador Galáctico, se encerró en su trono y puso un guardián implacable en cada región para que nadie llegara hasta él.",
+    "Solo queda una nave en pie. La tuya, {name}. Ya no hay refuerzos ni retirada: o vuelas, o la galaxia se apaga.",
+]
+LORE_SECTOR = [
+    ["La Nebulosa Alfa fue el primer puerto de la Guardia. Hoy sus faros están apagados y un Centinela patrulla el paso: antes protegía este lugar, ahora obedece al Emperador."],
+    ["El Cinturón Rojo, forja de las naves de la Guardia, arde sin descanso. Entre los asteroides acecha el Titán Escarlata, una máquina de guerra que nunca fue vencida."],
+    ["En el corazón de una estrella moribunda late el Núcleo Estelar. Dicen que algo despertó allí dentro y que observa a través de cada alien que te ataca."],
+    ["Más allá del Núcleo comienza el Abismo Glacial, un cementerio helado donde yacen las flotas caídas. El frío lo conserva todo... incluso a quienes aún vigilan."],
+    ["La Colmena Verde devora mundos enteros. Su Reina no lucha por conquista, sino por hambre, y su zumbido ya se oye en tus sensores."],
+    ["En el Vacío Oscuro no llega ninguna luz. Los exploradores que entraron jamás regresaron: algo los caza en la oscuridad, y ahora te ha olido."],
+    ["Aquí está el secreto del Emperador: la Forja Solar, un reactor que alimenta a toda su flota. Si cae, su imperio perderá la fuerza. Y su guardián lo sabe."],
+    ["El Trono Galáctico. Tras mil años de guerra solo queda una puerta entre tú y el Emperador. No hay camino de regreso. Que la galaxia recuerde tu nombre."],
+]
+LORE_BOSS_PRE = [
+    ["\"Identificado: último piloto de la Guardia. Mi orden es clara. Ningún intruso cruzará la Nebulosa.\""],
+    ["\"Mil naves vinieron por mí. Mil naves son hoy chatarra en mi cinturón. Tú serás la siguiente.\""],
+    ["\"Te vi llegar mucho antes de que despegaras. Conozco cada disparo que harás... y ninguno te salvará.\""],
+    ["\"Aquí el tiempo se detiene. Quédate. Duerme junto a los demás. El frío es otra forma de paz.\""],
+    ["\"Mis hijos no conocen el miedo ni el cansancio. Ven, pequeña nave. Hay sitio de sobra en la colmena.\""],
+    ["\"No puedes oírme, pero yo oigo tu corazón. En la oscuridad, la presa siempre se delata.\""],
+    ["\"Potencia al máximo. Esta energía es la vida del Imperio. Intentar apagarla es un error fatal: el tuyo.\""],
+    ["\"Mil años esperé a alguien que llegara hasta aquí. Eres tan terco como el último que cayó. Ven, {name}. Acabemos con esto.\""],
+]
+LORE_BOSS_WIN = [
+    ["El Centinela se apaga y la Nebulosa vuelve a brillar. Los faros del primer puerto parpadean: la Guardia aún no ha muerto."],
+    ["El Titán se desploma entre las llamas del Cinturón y las forjas dejan de rugir. Por primera vez en años hay silencio... y esperanza."],
+    ["El Ojo se cierra. Del Núcleo escapa un último destello, como un suspiro. Quien lo dominaba ya no mira a través de él."],
+    ["El hielo se resquebraja y las flotas dormidas parecen despertar. No estás solo en este abismo. Nunca lo estuviste."],
+    ["La Reina calla y el zumbido cesa. Los mundos de la Colmena respiran de nuevo. Pero aún queda camino."],
+    ["La oscuridad se disuelve. Una luz tenue baña el Vacío: alguien, muy lejos, ha encendido un faro para ti."],
+    ["El reactor colapsa. La flota del Emperador pierde su fuerza y el miedo cruza su imperio. Solo queda su trono."],
+    ["El Emperador cae. Su trono se apaga y, con él, la sombra que cubría la galaxia."],
+]
+LORE_END = [
+    "El silencio vuelve a las ocho regiones. En cada puerto, uno a uno, los faros se encienden.",
+    "Los guardianes ya no vigilan: descansan. Las flotas caídas no regresarán, pero su sacrificio no fue en vano.",
+    "Nadie sabrá cuántos disparos hicieron falta. Solo que una nave, una sola, se negó a rendirse.",
+    "Gracias, {name}. La galaxia recordará tu nombre.\n\nFIN",
+]
+
+
+def lore_scenes(kind, i=0):
+    """Devuelve la escena (título, color, páginas) si ese fragmento aún no se mostró; si no, lista vacía."""
+    key = kind if kind in ("intro", "end") else "%s%d" % (kind, i)
+    if key in lore_seen:
+        return []
+    lore_seen.add(key)
+    if kind == "intro":
+        return [("PROLOGO", CYAN, LORE_INTRO)]
+    if kind == "s":
+        return [("SECTOR %d - %s" % (i + 1, SECTOR_NAMES[i]), SECTOR_COLORS[i], LORE_SECTOR[i])]
+    if kind == "bp":
+        return [(BOSS_NAMES[i + 1], (255, 90, 90), LORE_BOSS_PRE[i])]
+    if kind == "bw":
+        return [(BOSS_NAMES[i + 1] + " DERROTADO", GREEN, LORE_BOSS_WIN[i])]
+    return [("EPILOGO", YELLOW, LORE_END)]
+
+
+story_scenes = []
+story_si = 0
+story_pi = 0
+story_t = 0.0
+story_then = None
+_wrap_cache = {}
+
+
+def wrap_text(font, text, maxw):
+    key = (id(font), text, maxw)
+    r = _wrap_cache.get(key)
+    if r is None:
+        r = []
+        for para in text.split("\n"):
+            cur = ""
+            for w in para.split(" "):
+                t = (cur + " " + w).strip()
+                if font.size(t)[0] <= maxw or not cur:
+                    cur = t
+                else:
+                    r.append(cur)
+                    cur = w
+            r.append(cur)
+        _wrap_cache[key] = r
+    return r
+
+
+def story_text():
+    t = story_scenes[story_si][2][story_pi]
+    return t.replace("{name}", player_name or "PILOTO")
+
+
+def run_story(scenes, then):
+    """Muestra una o varias escenas de historia y al terminar (o al saltarlas) llama a then()."""
+    global game_state, story_scenes, story_si, story_pi, story_t, story_then
+    story_scenes, story_si, story_pi, story_t, story_then = scenes, 0, 0, 0.0, then
+    release_all()
+    block_input()
+    pygame.time.set_timer(ENEMY_SPAWN, 0)
+    set_music("select")
+    game_state = "STORY"
+
+
+def story_finish():
+    global story_then
+    then, story_then = story_then, None
+    release_all()
+    block_input()
+    if then is not None:
+        then()
+
+
+def story_advance():
+    global story_si, story_pi, story_t
+    if story_si >= len(story_scenes):
+        return
+    if int(story_t * 1.3) < len(story_text()):     # primero se completa el texto que está apareciendo
+        story_t = 1e6
+        return
+    story_pi += 1
+    story_t = 0.0
+    play("click")
+    if story_pi >= len(story_scenes[story_si][2]):
+        story_si += 1
+        story_pi = 0
+        if story_si >= len(story_scenes):
+            story_finish()
+
+
+def story_touch(e_type, tid, tx, ty):
+    if game_state != "STORY":
+        return
+    if btn_story_skip.process_event(e_type, tid, tx, ty) and e_type == 'down' and ui_ok("sskip"):
+        story_finish()
+        return
+    if e_type == 'down' and not btn_story_skip.rect.inflate(14, 14).collidepoint(tx, ty) and ui_ok("story"):
+        story_advance()
+
+
+def draw_story():
+    global story_t
+    if game_state != "STORY" or story_si >= len(story_scenes):
+        return
+    title, col, pages = story_scenes[story_si]
+    text = story_text()
+    story_t += 1
+    canvas.blit(dark_surf, (0, 0))
+    tf = font_large if font_large.size(title)[0] < WIDTH * 0.9 else font_medium
+    ty0 = int(HEIGHT * 0.09)
+    draw_text(tf, title, col, WIDTH // 2, ty0)
+    ly = ty0 + tf.get_height() + 6
+    pygame.draw.line(canvas, col, (int(WIDTH * 0.2), ly), (int(WIDTH * 0.8), ly), 2)
+    lines = wrap_text(font_medium, text, int(WIDTH * 0.78))
+    n = int(story_t * 1.3)
+    x0, y, lh = int(WIDTH * 0.11), int(HEIGHT * 0.31), font_medium.get_height() + 6
+    shown = 0
+    for ln in lines:
+        if shown >= n:
+            break
+        part = ln[:max(0, n - shown)]
+        shown += len(ln) + 1
+        if part:
+            canvas.blit(text_surf(font_medium, part, (236, 240, 255)), (x0, y))
+        y += lh
+    if n >= len(text) and (pygame.time.get_ticks() // 450) % 2 == 0:
+        draw_text(font_small, "toca para continuar", LIGHT_GRAY, WIDTH // 2, int(HEIGHT * 0.90))
+    for k in range(len(pages)):
+        pygame.draw.circle(canvas, col if k == story_pi else (70, 74, 100),
+                           (int(WIDTH // 2 + (k - (len(pages) - 1) / 2.0) * 12), int(HEIGHT * 0.84)), 3)
+    btn_story_skip.draw(canvas)
+
+
+def begin_node(g):
+    """Entrar a un nivel del mapa: si es la primera vez, se muestra antes el prólogo / el texto del sector."""
+    sec, n = divmod(g, LEVELS_PER_SECTOR)
+    scenes = []
+    if g == 0:
+        scenes += lore_scenes("intro")
+    if n == 0:
+        scenes += lore_scenes("s", sec)
+    if scenes:
+        save_game()
+        run_story(scenes, lambda: reset_game("LEVELS", g))
+    else:
+        reset_game("LEVELS", g)
+
+
 def finish_node():
     """Se terminó el nodo actual del mapa (nivel o nivel + boss)."""
-    global progress, game_state
+    global progress
     if current_node == progress and progress < TOTAL_NODES:
         progress += 1
+    sec, n = divmod(current_node, LEVELS_PER_SECTOR)
+    last = current_node >= TOTAL_NODES - 1
+    scenes = []
+    if n == LEVELS_PER_SECTOR - 1:                  # acaba de caer el boss del sector
+        scenes += lore_scenes("bw", sec)
+        if last:
+            scenes += lore_scenes("end")
     save_game()
-    if current_node >= TOTAL_NODES - 1:
-        game_state = "VICTORY"
-        set_music(None)
-        play("victory")
+    pygame.time.set_timer(ENEMY_SPAWN, 0)
+
+    def _after():
+        global game_state
+        if last:
+            game_state = "VICTORY"
+            set_music(None)
+            play("victory")
+        else:
+            open_map()
+    if scenes:
+        run_story(scenes, _after)
     else:
-        pygame.time.set_timer(ENEMY_SPAWN, 0)
-        open_map()
+        _after()
 
 
 def map_touch(e_type, tid, tx, ty):
@@ -4466,7 +4703,7 @@ def map_touch(e_type, tid, tx, ty):
             if math.hypot(tx - nx, ty - ny) <= node_radius(i) + 8 and ui_ok(("node", map_sec, i)):
                 g = map_sec * LEVELS_PER_SECTOR + i
                 if g <= progress:
-                    reset_game("LEVELS", g)
+                    begin_node(g)
                 else:
                     play("lock_off")
                 break
@@ -4656,6 +4893,9 @@ while running:
 
             elif game_state == "SETTINGS":
                 settings_touch(e_type, tid, tx, ty)
+
+            elif game_state == "STORY":
+                story_touch(e_type, tid, tx, ty)
 
             elif game_state == "LAYOUT":
                 layout_touch(e_type, tid, tx, ty)
@@ -4976,7 +5216,8 @@ while running:
         if transition_timer <= 0:
             if game_mode == "LEVELS" and stage_idx + 1 < len(stages):
                 start_stage(stage_idx + 1)
-                game_state = "PLAYING"
+                if game_state != "STORY":
+                    game_state = "PLAYING"
             else:
                 finish_node()
 
@@ -5026,6 +5267,9 @@ while running:
 
     elif game_state == "SETTINGS":
         draw_settings()
+
+    elif game_state == "STORY":
+        draw_story()
 
     elif game_state == "LAYOUT":
         draw_layout()
