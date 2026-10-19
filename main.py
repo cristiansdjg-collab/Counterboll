@@ -9,7 +9,8 @@ import time
 from array import array
 
 # =====================================================================
-#  ATTACK ON THE ALIENS  -  v1.14: LORE en el modo historia (prólogo, texto de cada sector, diálogo de cada boss, victorias y epílogo).
+#  ATTACK ON THE ALIENS  -  v1.15: cada nivel tiene 3 PARTES (con animación entre partes) y al terminar se oscurece y vuelve al mapa; sectores 5-8 con 6/7/9/10 niveles.
+#  (antes v1.14: LORE en el modo historia (prólogo, texto de cada sector, diálogo de cada boss, victorias y epílogo).
 #  (antes v1.13: pantalla que se adapta/centra en cualquier dispositivo, AJUSTES (engrane): volumen de música y
 #  efectos, transparencia y posición de los controles; música distinta para menú, selección, combate y cada BOSS.
 #  (antes v1.12.1: opción ELIMINAR perfil (con su progreso, monedas y mejoras) en la pantalla de perfil.
@@ -3590,8 +3591,31 @@ transition_msg = ""
 
 # ---- HISTORIA: 8 sectores x 5 niveles (el nivel 5 de cada sector termina con un BOSS distinto) ----
 SECTORS = 8
-LEVELS_PER_SECTOR = 5
-TOTAL_NODES = SECTORS * LEVELS_PER_SECTOR
+# Niveles por sector: los 4 primeros tienen 5; desde el sector 5 va subiendo hasta 10 en el sector 8.
+# (Cambia esta lista si quieres otra progresión.)
+SECTOR_LEVELS = (5, 5, 5, 5, 6, 7, 9, 10)
+SECTOR_START = [sum(SECTOR_LEVELS[:i]) for i in range(SECTORS)]      # nodo global donde empieza cada sector
+TOTAL_NODES = sum(SECTOR_LEVELS)
+PARTS_PER_LEVEL = 3                                                  # cada nivel se juega en 3 partes
+PART_TOTAL_MULT = (0.85, 1.0, 1.2)                                   # enemigos de cada parte (la 3ª es la más dura)
+PART_SPEED_MULT = (1.0, 1.05, 1.1)
+
+
+def node_sec(g):
+    """Nodo global -> (sector, nivel dentro del sector empezando en 0)."""
+    g = max(0, min(TOTAL_NODES - 1, g))
+    for sec in range(SECTORS - 1, -1, -1):
+        if g >= SECTOR_START[sec]:
+            return sec, g - SECTOR_START[sec]
+    return 0, 0
+
+
+def node_g(sec, n):
+    return SECTOR_START[sec] + n
+
+
+def sec_of_progress(p):
+    return node_sec(p)[0] if p < TOTAL_NODES else SECTORS - 1
 SECTOR_NAMES = ["NEBULOSA ALFA", "CINTURON ROJO", "NUCLEO ESTELAR", "ABISMO GLACIAL",
                 "COLMENA VERDE", "VACIO OSCURO", "FORJA SOLAR", "TRONO GALACTICO"]
 SECTOR_COLORS = [(0, 240, 255), (255, 150, 30), (210, 100, 255), (120, 200, 255),
@@ -3602,22 +3626,40 @@ SEC_SPEED_MULT = (1.0, 1.2, 1.4, 1.5, 1.62, 1.74, 1.86, 2.0)     # enemigos más
 SEC_SHOOT = (0.0, 0.25, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75)         # probabilidad de que un alien dispare
 
 
-def make_level_stage(sec, n):
-    return {"type": "level", "sec": sec, "num": n,
-            "total": int(round(BASE_TOTALS[n] * SEC_TOTAL_MULT[sec])),
-            "speed": (1.0 + 0.06 * (n - 1)) * SEC_SPEED_MULT[sec],
-            "on_screen": min(min(10 + 2 * sec, 14), 2 + n + 2 * sec),
-            "interval": max(220, 500 - 100 * sec, 1100 - 80 * n - 150 * sec),
+def _diff_at(n, L):
+    """Dificultad equivalente (escala 1..5) del nivel n de un sector con L niveles."""
+    if L <= 1:
+        return 5.0
+    return 1.0 + 4.0 * (n - 1) / float(L - 1)
+
+
+def _base_total(d):
+    lo = int(d)
+    hi = min(5, lo + 1)
+    f = d - lo
+    return BASE_TOTALS[lo] + (BASE_TOTALS[hi] - BASE_TOTALS[lo]) * f
+
+
+def make_level_stage(sec, n, part=1):
+    """Una PARTE (1..3) del nivel n del sector sec."""
+    L = SECTOR_LEVELS[sec]
+    d = _diff_at(n, L)
+    p = part - 1
+    return {"type": "level", "sec": sec, "num": n, "part": part,
+            "total": max(4, int(round(_base_total(d) * SEC_TOTAL_MULT[sec] * PART_TOTAL_MULT[p]))),
+            "speed": (1.0 + 0.06 * (d - 1)) * SEC_SPEED_MULT[sec] * PART_SPEED_MULT[p],
+            "on_screen": min(min(10 + 2 * sec, 14), 2 + int(round(d)) + 2 * sec + p),
+            "interval": max(220, 500 - 100 * sec, 1100 - int(80 * d) - 150 * sec - 40 * p),
             "shoot": SEC_SHOOT[sec],
-            "label": "Nivel %d-%d" % (sec + 1, n)}
+            "label": "Nivel %d-%d  P%d/%d" % (sec + 1, n, part, PARTS_PER_LEVEL)}
 
 
 def build_node_stages(g):
-    """Etapas del nodo g (0..39) del mapa. El 5º de cada sector: nivel + BOSS."""
-    sec, n = divmod(g, LEVELS_PER_SECTOR)
+    """Etapas del nodo g del mapa: 3 partes. El último nivel de cada sector termina además con el BOSS."""
+    sec, n = node_sec(g)
     n += 1
-    out = [make_level_stage(sec, n)]
-    if n == LEVELS_PER_SECTOR:
+    out = [make_level_stage(sec, n, pt) for pt in range(1, PARTS_PER_LEVEL + 1)]
+    if n == SECTOR_LEVELS[sec]:
         k = sec + 1
         out.append({"type": "boss", "idx": k, "sec": sec, "label": BOSS_NAMES[k]})
     return out
@@ -3651,6 +3693,8 @@ wave_active = False
 wave_radius = 0.0
 menu_time = 0.0
 
+fade_surf = pygame.Surface((WIDTH, HEIGHT))
+fade_surf.fill((0, 0, 0))
 ENEMY_SPAWN = pygame.USEREVENT + 1
 LIFE_SPAWN = pygame.USEREVENT + 2
 pygame.time.set_timer(ENEMY_SPAWN, 1000)
@@ -3846,7 +3890,7 @@ lore_seen = set()        # fragmentos de historia ya mostrados a este perfil ('i
 
 
 def new_profile_data():
-    return {"ship": 0, "progress": 0, "coins_q": 0, "upg": {u["key"]: 0 for u in UPGRADES}, "lore": []}
+    return {"ship": 0, "progress": 0, "coins_q": 0, "upg": {u["key"]: 0 for u in UPGRADES}, "lore": [], "pv": 2}
 
 
 def settings_dict():
@@ -3878,7 +3922,7 @@ def save_game():
     try:
         if player_name:
             profiles[player_name] = {"ship": ship_idx, "progress": progress,
-                                     "coins_q": coins_q, "upg": dict(upg), "lore": sorted(lore_seen)}
+                                     "coins_q": coins_q, "upg": dict(upg), "lore": sorted(lore_seen), "pv": 2}
         with open(SAVE_PATH, "w") as f:
             json.dump({"last": player_name, "profiles": profiles, "settings": settings_dict()}, f)
     except Exception:
@@ -3892,6 +3936,10 @@ def load_profile(name):
     player_name = name
     coins_q = max(0, int(d.get("coins_q", 0)))
     progress = max(0, min(TOTAL_NODES, int(d.get("progress", 0))))
+    if int(d.get("pv", 1)) < 2:                 # guardado viejo: 5 niveles por sector -> convertir al nuevo reparto
+        old = int(d.get("progress", 0))
+        osec, on = divmod(old, 5)
+        progress = TOTAL_NODES if osec >= SECTORS else min(TOTAL_NODES, SECTOR_START[osec] + min(on, SECTOR_LEVELS[osec]))
     saved = d.get("upg", {})
     for u in UPGRADES:
         upg[u["key"]] = max(0, min(len(u["cost"]), int(saved.get(u["key"], 0))))
@@ -3903,10 +3951,10 @@ def load_profile(name):
         lore_seen = set()
         if progress > 0:
             lore_seen.add("intro")
-            for s in range(min(SECTORS, progress // LEVELS_PER_SECTOR + 1)):
-                if s * LEVELS_PER_SECTOR < progress:
+            for s in range(SECTORS):
+                if SECTOR_START[s] < progress:
                     lore_seen.add("s%d" % s)
-                if (s + 1) * LEVELS_PER_SECTOR <= progress:
+                if SECTOR_START[s] + SECTOR_LEVELS[s] <= progress:
                     lore_seen.add("bp%d" % s)
                     lore_seen.add("bw%d" % s)
             if progress >= TOTAL_NODES:
@@ -4144,7 +4192,7 @@ def open_color():
 def open_map():
     global game_state, map_sec
     release_all()
-    map_sec = min(SECTORS - 1, progress // LEVELS_PER_SECTOR)
+    map_sec = sec_of_progress(progress)
     game_state = "MAP"
     set_music("select")
     play("click")
@@ -4451,16 +4499,22 @@ def draw_color():
 
 
 # ---------- mapa de niveles (estilo camino de PvZ 2) ----------
-MAP_XS = (0.15, 0.325, 0.5, 0.675, 0.85)
 MAP_YS = (0.68, 0.47, 0.64, 0.44, 0.60)
 
 
-def node_pos(i):
-    return int(WIDTH * MAP_XS[i]), int(HEIGHT * MAP_YS[i])
+def node_pos(i, L=None):
+    if L is None:
+        L = SECTOR_LEVELS[map_sec]
+    x0, x1 = (0.15, 0.85) if L <= 5 else (0.10, 0.90)
+    x = x0 + (x1 - x0) * (i / float(L - 1))
+    y = MAP_YS[i % len(MAP_YS)]
+    return int(WIDTH * x), int(HEIGHT * y)
 
 
-def node_radius(i):
-    return 20 if i == LEVELS_PER_SECTOR - 1 else 15
+def node_radius(i, L=None):
+    if L is None:
+        L = SECTOR_LEVELS[map_sec]
+    return 20 if i == L - 1 else (13 if L > 7 else 15)
 
 
 # =====================================================================================================
@@ -4641,7 +4695,7 @@ def draw_story():
 
 def begin_node(g):
     """Entrar a un nivel del mapa: si es la primera vez, se muestra antes el prólogo / el texto del sector."""
-    sec, n = divmod(g, LEVELS_PER_SECTOR)
+    sec, n = node_sec(g)
     scenes = []
     if g == 0:
         scenes += lore_scenes("intro")
@@ -4659,10 +4713,10 @@ def finish_node():
     global progress
     if current_node == progress and progress < TOTAL_NODES:
         progress += 1
-    sec, n = divmod(current_node, LEVELS_PER_SECTOR)
+    sec, n = node_sec(current_node)
     last = current_node >= TOTAL_NODES - 1
     scenes = []
-    if n == LEVELS_PER_SECTOR - 1:                  # acaba de caer el boss del sector
+    if n == SECTOR_LEVELS[sec] - 1:                  # acaba de caer el boss del sector
         scenes += lore_scenes("bw", sec)
         if last:
             scenes += lore_scenes("end")
@@ -4698,10 +4752,10 @@ def map_touch(e_type, tid, tx, ty):
         open_menu()
         return
     if e_type == 'down':
-        for i in range(LEVELS_PER_SECTOR):
+        for i in range(SECTOR_LEVELS[map_sec]):
             nx, ny = node_pos(i)
             if math.hypot(tx - nx, ty - ny) <= node_radius(i) + 8 and ui_ok(("node", map_sec, i)):
-                g = map_sec * LEVELS_PER_SECTOR + i
+                g = node_g(map_sec, i)
                 if g <= progress:
                     begin_node(g)
                 else:
@@ -4711,7 +4765,8 @@ def map_touch(e_type, tid, tx, ty):
 
 def draw_map():
     acc = SECTOR_COLORS[map_sec]
-    base = map_sec * LEVELS_PER_SECTOR
+    base = SECTOR_START[map_sec]
+    LV = SECTOR_LEVELS[map_sec]
     draw_text(font_large, "SECTOR %d" % (map_sec + 1), acc, WIDTH // 2, 4)
     draw_text(font_medium, SECTOR_NAMES[map_sec], WHITE, WIDTH // 2, 40)
     for i in range(SECTORS):
@@ -4719,7 +4774,7 @@ def draw_map():
     draw_text(font_medium, player_name or "PILOTO", LIGHT_GRAY, int(WIDTH * 0.14), 8)
 
     # camino
-    for i in range(LEVELS_PER_SECTOR - 1):
+    for i in range(LV - 1):
         x0, y0 = node_pos(i)
         x1, y1 = node_pos(i + 1)
         done = base + i < progress
@@ -4734,11 +4789,11 @@ def draw_map():
             pygame.draw.rect(canvas, acc if done else (86, 92, 128), (pts[k][0] - 1, pts[k][1] - 1, 3, 3))
 
     # nodos
-    for i in range(LEVELS_PER_SECTOR):
+    for i in range(LV):
         x, y = node_pos(i)
         r = node_radius(i)
         g = base + i
-        boss_node = (i == LEVELS_PER_SECTOR - 1)
+        boss_node = (i == LV - 1)
         if g < progress:
             fill, rim = ((170, 50, 70), (255, 140, 150)) if boss_node else ((40, 170, 70), (150, 255, 170))
         elif g == progress:
@@ -4764,10 +4819,10 @@ def draw_map():
 
     # nave sobre el nodo actual
     ci = progress - base
-    if 0 <= ci < LEVELS_PER_SECTOR:
+    if 0 <= ci < LV:
         x, y = node_pos(ci)
         bob = int(math.sin(frame * 0.1) * 3)
-        if ci == LEVELS_PER_SECTOR - 1:
+        if ci == LV - 1:
             canvas.blit(SHIP_ICON, SHIP_ICON.get_rect(center=(x - 36, y + bob)))
         else:
             canvas.blit(SHIP_ICON, SHIP_ICON.get_rect(center=(x, y - node_radius(ci) - 16 + bob)))
@@ -4986,6 +5041,8 @@ while running:
                 if stage["type"] == "boss":
                     transition_msg = "¡BOSS DERROTADO!"
                     player.lives = min(max_lives(), player.lives + 1)   # premio por vencer al boss
+                elif stage_idx + 1 < len(stages):
+                    transition_msg = "¡PARTE %d COMPLETADA!" % stage.get("part", 1)
                 else:
                     transition_msg = "¡NIVEL COMPLETADO!"
                 game_state = "TRANSITION"
@@ -5407,6 +5464,13 @@ while running:
         if game_state == "TRANSITION":
             draw_text(font_large, transition_msg, GREEN, WIDTH // 2, HEIGHT // 3 - 26)
             draw_text(font_large, "VELOCIDAD LUZ...", CYAN, WIDTH // 2, HEIGHT // 3)
+            if game_mode == "LEVELS" and stage_idx + 1 >= len(stages):
+                # última parte del nivel: la pantalla se oscurece poco a poco hasta negro
+                k = 1.0 - transition_timer / 150.0
+                a = int(255 * max(0.0, min(1.0, (k - 0.35) / 0.65)))
+                if a > 0:
+                    fade_surf.set_alpha(a)
+                    canvas.blit(fade_surf, (0, 0))
 
         if game_state == "PAUSED":
             canvas.blit(dark_surf, (0, 0))
