@@ -18,10 +18,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y git zip unzip autoconf libtool pkg-config zlib1g-dev libncurses5-dev libffi-dev libssl-dev
           pip install buildozer "cython==0.29.36"
-      - name: Usar siempre la misma llave de firma
-        run: |
-          mkdir -p ~/.android
-          cp debug.keystore ~/.android/debug.keystore
       - name: Compilar APK
         run: |
           set +e
@@ -33,6 +29,15 @@ jobs:
             tail -80 build.log
             exit $code
           fi
+      - name: Firmar el APK con la llave fija
+        run: |
+          APKSIGNER=$(find ~/.buildozer/android/platform -path "*build-tools*" -name apksigner | sort | tail -1)
+          echo "apksigner: $APKSIGNER"
+          for f in bin/*.apk; do
+            "$APKSIGNER" sign --ks debug.keystore --ks-pass pass:android --key-pass pass:android --ks-key-alias androiddebugkey "$f"
+            echo "===== FIRMA de $f ====="
+            "$APKSIGNER" verify --print-certs "$f" | head -4
+          done
       - uses: actions/upload-artifact@v4
         if: always()
         with:
