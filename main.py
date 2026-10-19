@@ -88,6 +88,46 @@ if SW == 0 or SH == 0:
 else:
     screen = pygame.display.get_surface() or screen
 
+# ---- PANTALLA DE CARGA animada (archivo loading.py junto a main.py; si no está, el juego arranca igual) ----
+try:
+    import loading as _loading
+    _LS = _loading.LoadingScreen("ATTACK ON THE ALIENS", screen)
+except Exception:
+    _LS = None
+
+
+def _ld(p, text="", frames=8):
+    """Avanza la barra de carga a 'p' (0..1) y anima unos cuadros."""
+    global _LS
+    if _LS is None:
+        return
+    try:
+        _LS.set(p, text)
+        for _ in range(frames):
+            _LS.frame()
+    except Exception:
+        _LS = None
+
+
+def _ld_done():
+    """Llena la barra, oscurece y quita la pantalla de carga."""
+    global _LS
+    if _LS is None:
+        return
+    try:
+        _LS.set(1.0, "Listo")
+        for _ in range(120):
+            _LS.frame()
+            if _LS.shown >= 1.0:
+                break
+        _LS.fade_out()
+    except Exception:
+        pass
+    _LS = None
+
+
+_ld(0.03, "Iniciando", 10)
+
 HEIGHT = LOGICAL_H
 WIDTH = int(round(LOGICAL_H * SW / float(SH)))
 canvas = pygame.Surface((WIDTH, HEIGHT)).convert()
@@ -819,7 +859,9 @@ def music_pause(flag):
             pass
 
 
+_ld(0.06, "Generando sonidos")
 init_audio()
+_ld(0.35, "Sonidos listos")
 
 
 # =====================================================================
@@ -1060,6 +1102,7 @@ BOSS_MAT = [
 BOSS_PAL = {'M': (120, 64, 160), 'L': (180, 120, 220), 'D': (52, 24, 84), 'R': (240, 50, 60),
             'E': (250, 250, 250), 'K': (255, 40, 40), 'Y': (255, 220, 60), 'O': (255, 140, 30)}
 BOSS_IMG = make_surface(BOSS_MAT, BOSS_PAL, (20, 5, 35), "EKYO", 3)
+_ld(0.48, "Dibujando jefes")
 
 
 def _tinted(surf, rgb):
@@ -1300,6 +1343,7 @@ def make_bg():
 
 
 bg_game = make_bg()
+_ld(0.6, "Creando planetas")
 
 
 # =====================================================================
@@ -1440,6 +1484,7 @@ def make_vg_streaks():
 
 
 VG_STREAKS = make_vg_streaks()
+_ld(0.72, "Encendiendo estrellas")
 
 
 _vg_sky = pygame.Surface((WIDTH, HEIGHT)).convert()
@@ -2023,6 +2068,7 @@ def make_color_orb(d):
 COIN_ICON = make_coin_icon(14)
 COIN_ICON_BIG = make_coin_icon(18)
 COLOR_ORB = make_color_orb(28)
+_ld(0.82, "Preparando naves")
 
 
 class Player:
@@ -3406,8 +3452,9 @@ btn_map_back = ModernButton(int(WIDTH * 0.13), int(HEIGHT * 0.92), int(WIDTH * 0
 # ---- AJUSTES (engrane) y editor de controles ----
 btn_gear = ModernButton(WIDTH - 24, HEIGHT - 24, 36, 36, "", True)
 btn_set_back = ModernButton(WIDTH // 2, int(HEIGHT * 0.90), int(WIDTH * 0.34), BH, "VOLVER")
-btn_set_move = ModernButton(int(WIDTH * 0.30), int(HEIGHT * 0.72), int(WIDTH * 0.38), BH, "MOVER CONTROLES")
-btn_set_reset = ModernButton(int(WIDTH * 0.70), int(HEIGHT * 0.72), int(WIDTH * 0.38), BH, "RESTABLECER")
+btn_set_cont = ModernButton(WIDTH // 2, int(HEIGHT * 0.62), int(WIDTH * 0.5), BH, "CONTINUO: NO")
+btn_set_move = ModernButton(int(WIDTH * 0.30), int(HEIGHT * 0.77), int(WIDTH * 0.38), BH, "MOVER CONTROLES")
+btn_set_reset = ModernButton(int(WIDTH * 0.70), int(HEIGHT * 0.77), int(WIDTH * 0.38), BH, "RESTABLECER")
 btn_lay_done = ModernButton(WIDTH // 2, int(HEIGHT * 0.90), int(WIDTH * 0.2), BH, "LISTO")
 btn_lay_reset = ModernButton(WIDTH // 2, int(HEIGHT * 0.78), int(WIDTH * 0.26), BH, "RESTABLECER")
 preview_btn = ModernButton(0, 0, 40, 40, "", True)
@@ -3449,6 +3496,8 @@ def ctrl_hit(name, tx, ty):
 
 CTRL_DEFAULT = {n: (ctrl_center(n)[0] / float(WIDTH), ctrl_center(n)[1] / float(HEIGHT)) for n in CTRL_NAMES}
 ctrl_pos = {}            # posiciones personalizadas (fracción de la pantalla); vacío = las de fábrica
+cont_mode = False         # AJUSTES > CONTINUO: al acabar un nivel sigue directo con el siguiente (sin pasar por el mapa)
+fade_in_t = 0            # cuadros restantes de aparición desde negro (modo continuo)
 ctrl_alpha = 1.0         # opacidad de los controles en partida (0.2 .. 1.0)
 
 
@@ -3480,6 +3529,7 @@ def make_gear_icon(d):
 
 
 GEAR_ICON = make_gear_icon(26)
+_ld(0.9, "Armando menus")
 
 
 def draw_gear_button():
@@ -3530,9 +3580,9 @@ class Slider:
 
 
 _sl_w = int(WIDTH * 0.5)
-sl_music = Slider("MUSICA", WIDTH // 2, int(HEIGHT * 0.25), _sl_w, 1.0)
-sl_sfx = Slider("EFECTOS", WIDTH // 2, int(HEIGHT * 0.40), _sl_w, 1.0)
-sl_alpha = Slider("TRANSPARENCIA", WIDTH // 2, int(HEIGHT * 0.55), _sl_w, 1.0)
+sl_music = Slider("MUSICA", WIDTH // 2, int(HEIGHT * 0.22), _sl_w, 1.0)
+sl_sfx = Slider("EFECTOS", WIDTH // 2, int(HEIGHT * 0.35), _sl_w, 1.0)
+sl_alpha = Slider("TRANSPARENCIA", WIDTH // 2, int(HEIGHT * 0.48), _sl_w, 1.0)
 
 
 def draw_control(fn, rect):
@@ -3570,7 +3620,7 @@ def draw_controls(nuke_p, dash_ready, dash_p, lock_on):
 
 
 btn_story_skip = ModernButton(WIDTH - 46, 22, 80, 28, "SALTAR")
-ALL_BUTTONS = (btn_story_skip, btn_gear, btn_set_back, btn_set_move, btn_set_reset, btn_lay_done, btn_lay_reset, preview_btn,
+ALL_BUTTONS = (btn_story_skip, btn_gear, btn_set_back, btn_set_cont, btn_set_move, btn_set_reset, btn_lay_done, btn_lay_reset, preview_btn,
                shoot_btn, nuke_btn, dash_btn, lock_btn, pause_btn, btn_infinite, btn_levels, btn_color, btn_shop, btn_shop_back, btn_rename,
                btn_resume, btn_menu, btn_retry, btn_menu_end, btn_name_ok, btn_color_ok, btn_name_del, btn_del_yes, btn_del_no,
                btn_map_prev, btn_map_next, btn_map_back)
@@ -3894,13 +3944,14 @@ def new_profile_data():
 
 
 def settings_dict():
-    return {"music": round(music_vol, 3), "sfx": round(sfx_vol, 3), "alpha": round(ctrl_alpha, 3),
+    return {"music": round(music_vol, 3), "sfx": round(sfx_vol, 3), "alpha": round(ctrl_alpha, 3), "cont": bool(cont_mode),
             "pos": {n: [round(v[0], 4), round(v[1], 4)] for n, v in ctrl_pos.items()}}
 
 
 def settings_apply(d):
-    global music_vol, sfx_vol, ctrl_alpha
+    global music_vol, sfx_vol, ctrl_alpha, cont_mode
     try:
+        cont_mode = bool(d.get("cont", False))
         music_vol = max(0.0, min(1.0, float(d.get("music", 1.0))))
         sfx_vol = max(0.0, min(1.0, float(d.get("sfx", 1.0))))
         ctrl_alpha = max(0.2, min(1.0, float(d.get("alpha", 1.0))))
@@ -4041,7 +4092,7 @@ def close_settings():
 
 
 def settings_touch(e_type, tid, tx, ty):
-    global music_vol, sfx_vol, ctrl_alpha, game_state, lay_drag
+    global music_vol, sfx_vol, ctrl_alpha, game_state, lay_drag, cont_mode
     r = sl_music.process_event(e_type, tid, tx, ty)
     if r:
         music_vol = sl_music.value
@@ -4060,6 +4111,10 @@ def settings_touch(e_type, tid, tx, ty):
         ctrl_alpha = 0.2 + 0.8 * sl_alpha.value
         if r == 'release':
             save_game()
+    if btn_set_cont.process_event(e_type, tid, tx, ty) and e_type == 'down' and ui_ok("scont"):
+        cont_mode = not cont_mode
+        save_game()
+        play("click")
     if btn_set_move.process_event(e_type, tid, tx, ty) and e_type == 'down' and ui_ok("smove"):
         release_all()
         lay_drag = None
@@ -4082,6 +4137,8 @@ def draw_settings():
     sl_alpha.draw("%d%%" % round(ctrl_alpha * 100))
     preview_btn.rect.center = (sl_alpha.rect.right + 44, sl_alpha.rect.centery)
     draw_control(lambda: preview_btn.draw(canvas), preview_btn.rect)
+    btn_set_cont.text = "CONTINUO: SI" if cont_mode else "CONTINUO: NO"
+    btn_set_cont.draw(canvas)
     btn_set_move.draw(canvas)
     btn_set_reset.draw(canvas)
     btn_set_back.draw(canvas)
@@ -4725,10 +4782,14 @@ def finish_node():
 
     def _after():
         global game_state
+        global fade_in_t
         if last:
             game_state = "VICTORY"
             set_music(None)
             play("victory")
+        elif cont_mode:                             # CONTINUO: directo al siguiente nivel
+            fade_in_t = 30
+            begin_node(current_node + 1)
         else:
             open_map()
     if scenes:
@@ -4872,8 +4933,10 @@ def present():
 # =====================================================================
 #  BUCLE PRINCIPAL
 # =====================================================================
+_ld(0.97, "Casi listo")
 set_music("menu")
 menu_demo = MenuDemo()
+_ld_done()
 running = True
 _bad_fps = 0
 while running:
@@ -5471,6 +5534,11 @@ while running:
                 if a > 0:
                     fade_surf.set_alpha(a)
                     canvas.blit(fade_surf, (0, 0))
+
+        if fade_in_t > 0 and game_state == "PLAYING":
+            fade_surf.set_alpha(int(255 * fade_in_t / 30.0))
+            canvas.blit(fade_surf, (0, 0))
+            fade_in_t -= 1
 
         if game_state == "PAUSED":
             canvas.blit(dark_surf, (0, 0))
