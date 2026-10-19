@@ -18,6 +18,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y git zip unzip autoconf libtool pkg-config zlib1g-dev libncurses5-dev libffi-dev libssl-dev
           pip install buildozer "cython==0.29.36"
+      - name: Usar siempre la misma llave de firma
+        run: |
+          mkdir -p ~/.android
+          cp debug.keystore ~/.android/debug.keystore
       - name: Compilar APK
         run: |
           set +e
