@@ -9,7 +9,8 @@ import time
 from array import array
 
 # =====================================================================
-#  ATTACK ON THE ALIENS  -  v1.15: cada nivel tiene 3 PARTES (con animación entre partes) y al terminar se oscurece y vuelve al mapa; sectores 5-8 con 6/7/9/10 niveles.
+#  ATTACK ON THE ALIENS  -  v1.16: HISTORIA ANIMADA (escenas dibujadas por código: flota, invasión, trono, sectores, jefes, explosiones, fuegos artificiales).
+#  (antes v1.15: cada nivel tiene 3 PARTES (con animación entre partes) y al terminar se oscurece y vuelve al mapa; sectores 5-8 con 6/7/9/10 niveles.
 #  (antes v1.14: LORE en el modo historia (prólogo, texto de cada sector, diálogo de cada boss, victorias y epílogo).
 #  (antes v1.13: pantalla que se adapta/centra en cualquier dispositivo, AJUSTES (engrane): volumen de música y
 #  efectos, transparencia y posición de los controles; música distinta para menú, selección, combate y cada BOSS.
@@ -4738,14 +4739,491 @@ def lore_scenes(kind, i=0):
         return []
     lore_seen.add(key)
     if kind == "intro":
-        return [("PROLOGO", CYAN, LORE_INTRO)]
+        return [("PROLOGO", CYAN, LORE_INTRO, "intro", 0)]
     if kind == "s":
-        return [("SECTOR %d - %s" % (i + 1, SECTOR_NAMES[i]), SECTOR_COLORS[i], LORE_SECTOR[i])]
+        return [("SECTOR %d - %s" % (i + 1, SECTOR_NAMES[i]), SECTOR_COLORS[i], LORE_SECTOR[i], "s", i)]
     if kind == "bp":
-        return [(BOSS_NAMES[i + 1], (255, 90, 90), LORE_BOSS_PRE[i])]
+        return [(BOSS_NAMES[i + 1], (255, 90, 90), LORE_BOSS_PRE[i], "bp", i)]
     if kind == "bw":
-        return [(BOSS_NAMES[i + 1] + " DERROTADO", GREEN, LORE_BOSS_WIN[i])]
-    return [("EPILOGO", YELLOW, LORE_END)]
+        return [(BOSS_NAMES[i + 1] + " DERROTADO", GREEN, LORE_BOSS_WIN[i], "bw", i)]
+    return [("EPILOGO", YELLOW, LORE_END, "end", 0)]
+
+
+# =====================================================================================================
+#  ESCENAS ANIMADAS de la historia (todo dibujado por código; cada escena es una función del tiempo t)
+# =====================================================================================================
+_CINE = {}
+W_, H_ = WIDTH, HEIGHT
+
+
+def chrand(n):
+    """Número pseudo-aleatorio FIJO (0..1) a partir de un entero: las 'casualidades' se repiten igual."""
+    n = (int(n) * 1103515245 + 12345) & 0x7fffffff
+    n = (n * 1103515245 + 12345) & 0x7fffffff
+    return n / 2147483648.0
+
+
+def cease(x):
+    x = max(0.0, min(1.0, x))
+    return x * x * (3 - 2 * x)
+
+
+def cmix(a, b, f):
+    return (int(a[0] + (b[0] - a[0]) * f), int(a[1] + (b[1] - a[1]) * f), int(a[2] + (b[2] - a[2]) * f))
+
+
+def cine_bg(top, bot):
+    key = ("bg", top, bot)
+    s = _CINE.get(key)
+    if s is None:
+        s = pygame.Surface((WIDTH, HEIGHT))
+        for y in range(HEIGHT):
+            pygame.draw.line(s, cmix(top, bot, y / float(HEIGHT - 1)), (0, y), (WIDTH, y))
+        s = _CINE[key] = s.convert()
+    return s
+
+
+def cine_glow(x, y, col, r, k=1.0):
+    add_glow(canvas, x, y, col, max(8, (int(r) // 8) * 8), max(0.0, min(1.0, k)), 1)
+
+
+def cine_stars(t, vx=0.0, vy=0.0, col=(255, 255, 255), n=90, dim=1.0, streak=0):
+    tab = _CINE.get("stars")
+    if tab is None:
+        tab = _CINE["stars"] = [(chrand(i * 5 + 1), chrand(i * 5 + 2), 0.35 + 0.65 * chrand(i * 5 + 3), chrand(i * 5 + 4))
+                                for i in range(120)]
+    for i in range(min(n, len(tab))):
+        fx, fy, layer, ph = tab[i]
+        x = (fx * WIDTH + vx * t * layer * 6) % WIDTH
+        y = (fy * HEIGHT + vy * t * layer * 6) % HEIGHT
+        b = (0.6 + 0.4 * math.sin(t * 0.06 * (0.5 + ph) + ph * 6.28)) * layer * dim
+        c = (int(col[0] * b), int(col[1] * b), int(col[2] * b))
+        if streak > 0:
+            pygame.draw.line(canvas, c, (int(x), int(y)), (int(x), int(y + streak * layer)), 1)
+        elif layer > 0.8:
+            canvas.fill(c, (int(x), int(y), 2, 2))
+        else:
+            canvas.fill(c, (int(x), int(y), 1, 1))
+
+
+def cine_vignette():
+    v = _CINE.get("vig")
+    if v is None:
+        v = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        for i in range(14):
+            a = int(120 * (1 - i / 14.0) ** 2)
+            pygame.draw.rect(v, (0, 0, 0, a), (i * 5, i * 3, WIDTH - i * 10, HEIGHT - i * 6), 5)
+        v = _CINE["vig"] = v.convert_alpha()
+    canvas.blit(v, (0, 0))
+
+
+def cine_planet(cx, cy, r, col, atmo=None):
+    if atmo:
+        cine_glow(cx, cy, atmo, r * 1.5, 0.7)
+    pygame.draw.circle(canvas, shade(col, 0.42), (int(cx), int(cy)), int(r))
+    for i in range(1, 7):
+        pygame.draw.circle(canvas, shade(col, 0.42 + 0.1 * i), (int(cx - r * 0.07 * i), int(cy - r * 0.08 * i)), int(r * (1 - 0.13 * i)))
+    pygame.draw.circle(canvas, shade(col, 1.25), (int(cx - r * 0.38), int(cy - r * 0.42)), max(1, int(r * 0.12)))
+
+
+def cine_ship(x, y, ang=0.0, sc=1.0, t=0, flame=True, alpha=255, tint=None):
+    """Tu nave (ang 0 = hacia arriba, -90 = hacia la derecha)."""
+    fr = (t // 4) % 2
+    a = int(round(ang / 5.0)) * 5 % 360
+    key = ("ship", ship_idx, fr, a, int(sc * 20), tint)
+    img = _CINE.get(key)
+    if img is None:
+        img = pygame.transform.rotozoom(PLAYER_SPR[fr].base, a, sc).convert_alpha()
+        if tint:
+            img.fill((tint[0], tint[1], tint[2], 0), special_flags=pygame.BLEND_RGB_ADD)
+        _CINE[key] = img
+    hx, hy = -math.sin(math.radians(a)), -math.cos(math.radians(a))
+    if flame:
+        tl = 18 * sc
+        cine_glow(x - hx * tl, y - hy * tl, (255, 150, 50), 18 * sc + 8, 0.7 + 0.3 * math.sin(t * 0.6))
+    img.set_alpha(alpha)
+    canvas.blit(img, img.get_rect(center=(int(x), int(y))))
+
+
+def cine_alien(i, x, y, sc=1.0, tint=(60, 0, 0)):
+    key = ("alien", i % 3, int(sc * 10), tint)
+    img = _CINE.get(key)
+    if img is None:
+        b = ALIEN_SPRS[i % 3].base
+        img = pygame.transform.scale(b, (int(b.get_width() * sc), int(b.get_height() * sc))).convert_alpha()
+        img.fill((tint[0], tint[1], tint[2], 0), special_flags=pygame.BLEND_RGB_ADD)
+        _CINE[key] = img
+    canvas.blit(img, img.get_rect(center=(int(x), int(y))))
+
+
+def cine_boss_img(k, sc, mode=0):
+    """mode 0 = normal, 1 = destello blanco, 2 = silueta oscura."""
+    key = ("boss", k, int(sc * 25), mode)
+    img = _CINE.get(key)
+    if img is None:
+        b = BOSS_SETS[k][1 if mode == 1 else 0]
+        img = pygame.transform.scale(b, (int(b.get_width() * sc), int(b.get_height() * sc))).convert_alpha()
+        if mode == 2:
+            img.fill((70, 70, 90, 255), special_flags=pygame.BLEND_RGBA_MULT)
+        _CINE[key] = img
+    return img
+
+
+def cine_boom(x, y, age, size=1.0, col=(255, 190, 80)):
+    if age < 0 or age > 42:
+        return
+    f = age / 42.0
+    cine_glow(x, y, col, 40 * size, 1.0 - f)
+    pygame.draw.circle(canvas, cmix(col, (255, 255, 255), 0.5 * (1 - f)), (int(x), int(y)), int(size * (4 + 42 * f)), 3 if f < 0.5 else 1)
+    for i in range(9):
+        a = i * 0.698 + chrand(int(x) + i) * 0.5
+        d0, d1 = size * (8 + 40 * f), size * (14 + 52 * f)
+        pygame.draw.line(canvas, cmix(col, (255, 255, 255), 0.4),
+                         (int(x + math.cos(a) * d0), int(y + math.sin(a) * d0)),
+                         (int(x + math.cos(a) * d1), int(y + math.sin(a) * d1)), 1)
+
+
+def cine_firework(x, y, age, col, n=18, speed=1.5):
+    if age < 0 or age > 70:
+        return
+    f = age / 70.0
+    if age < 8:
+        cine_glow(x, y, col, 48, 1 - age / 8.0)
+    c0 = cmix(col, (255, 255, 255), 0.35 * (1 - f))
+    c = (int(c0[0] * (1 - f)), int(c0[1] * (1 - f)), int(c0[2] * (1 - f)))
+    for i in range(n):
+        a = i * 6.2832 / n + chrand(i) * 0.2
+        d = speed * age * (1 - 0.3 * f)
+        pygame.draw.circle(canvas, c, (int(x + math.cos(a) * d), int(y + math.sin(a) * d + 0.012 * age * age)), 2 if f < 0.6 else 1)
+
+
+# ------------------------------------------------------------------ PROLOGO (4 páginas)
+def art_intro(page, t):
+    W, H = WIDTH, HEIGHT
+    if page == 0:                      # la paz: una flota de la Guardia cruza un cielo sereno
+        canvas.blit(cine_bg((6, 10, 40), (34, 66, 118)), (0, 0))
+        cine_stars(t, vx=-0.05)
+        cine_glow(W * 0.84, H * 0.10, (255, 200, 120), 104, 0.7)
+        cine_planet(W * 0.20, H * 0.66, 86, (70, 150, 220), (60, 140, 255))
+        cine_planet(W * 0.80, H * 0.38, 15, (205, 205, 220))
+        sx, sy = W * 0.56, H * 0.22                                   # estación con anillo de luces
+        pygame.draw.ellipse(canvas, (70, 80, 110), (int(sx - 34), int(sy - 8), 68, 16), 3)
+        pygame.draw.circle(canvas, (150, 165, 200), (int(sx), int(sy)), 8)
+        for i in range(8):
+            a = i * 0.785 + t * 0.03
+            cine_glow(sx + math.cos(a) * 34, sy + math.sin(a) * 8, (255, 230, 150), 8, 0.9)
+        lead = (t * 1.25) % (W + 340) - 170
+        for i in range(7):
+            row, side = (i + 1) // 2, (1 if i % 2 else -1)
+            cine_ship(lead - row * 30, H * 0.40 + side * row * 15 + (0 if i == 0 else 0), -90, 0.8, t)
+    elif page == 1:                    # la invasión
+        canvas.blit(cine_bg((28, 4, 8), (96, 18, 22)), (0, 0))
+        cine_stars(t, vx=-0.1, col=(255, 190, 190))
+        cine_glow(W * 0.5, H * 1.02, (200, 30, 30), 192, 0.7 + 0.3 * math.sin(t * 0.08))
+        for i in range(15):
+            sp = 0.7 + chrand(i) * 0.9
+            x = (chrand(i * 3 + 1) * (W + 90) + t * 0.55 * sp) % (W + 90) - 45
+            y = (chrand(i * 3 + 2) * H * 1.3 + t * 0.95 * sp) % (H * 1.15) - 40
+            cine_glow(x, y, (255, 40, 40), 16, 0.45)
+            cine_alien(i, x, y, 1.0 + 0.5 * chrand(i + 40))
+        for b in range(6):
+            ev, age = divmod(t + b * 37, 64)
+            cine_boom(W * (0.1 + 0.8 * chrand(ev * 7 + b)), H * (0.08 + 0.5 * chrand(ev * 5 + b + 9)), age, 1.0 + 0.4 * chrand(b), (255, 170, 70))
+            if age == 0 and (ev + b) % 3 == 0:
+                add_shake(3)
+        if t % 190 < 4:
+            canvas.fill((70, 24, 24), special_flags=pygame.BLEND_RGB_ADD)
+    elif page == 2:                    # el trono y sus ocho guardianes
+        canvas.blit(cine_bg((14, 4, 26), (50, 10, 56)), (0, 0))
+        cine_stars(t, vx=-0.03, col=(230, 190, 255), dim=0.8)
+        z = 1.0 + min(t, 360) * 0.0006
+        cx, cy = W * 0.5, H * 0.46
+
+        def P(dx, dy):
+            return (int(cx + dx * z), int(cy + dy * z))
+        body = (16, 7, 30)
+        edge = (110, 40, 140)
+        pygame.draw.polygon(canvas, body, [P(-46, 70), P(-38, -52), P(-22, -42), P(-12, -86), P(0, -52), P(12, -86), P(22, -42), P(38, -52), P(46, 70)])
+        pygame.draw.polygon(canvas, edge, [P(-46, 70), P(-38, -52), P(-22, -42), P(-12, -86), P(0, -52), P(12, -86), P(22, -42), P(38, -52), P(46, 70)], 2)
+        pygame.draw.polygon(canvas, (24, 10, 40), [P(-70, 70), P(-70, 36), P(-46, 36), P(-46, 70)])
+        pygame.draw.polygon(canvas, (24, 10, 40), [P(70, 70), P(70, 36), P(46, 36), P(46, 70)])
+        gem = 0.65 + 0.35 * math.sin(t * 0.09)
+        cine_glow(*P(0, -22), (255, 40, 70), 56 * z, gem)
+        pygame.draw.circle(canvas, (255, 70, 90), P(0, -22), int(6 * z))
+        pygame.draw.circle(canvas, (255, 200, 200), P(-1, -23), int(2 * z))
+        for i in range(8):
+            ang = 3.1416 * (0.10 + 0.80 * i / 7.0)
+            gx, gy = cx - math.cos(ang) * W * 0.40 * z, H * 0.44 - math.sin(ang) * H * 0.34 * z
+            col = SECTOR_COLORS[i]
+            pygame.draw.line(canvas, shade(col, 0.28), P(0, -22), (int(gx), int(gy)), 1)
+            cine_glow(gx, gy, col, 26, 0.55 + 0.45 * math.sin(t * 0.07 - i * 0.8))
+            pygame.draw.circle(canvas, shade(col, 1.1), (int(gx), int(gy)), 3)
+    else:                              # el último piloto
+        canvas.blit(cine_bg((4, 6, 24), (14, 30, 70)), (0, 0))
+        cine_stars(t, vy=1.6, streak=min(26, 3 + t * 0.12))
+        x, y = W * 0.5, H * 0.36 + 3 * math.sin(t * 0.07)
+        cine_glow(x, y, (60, 200, 255), 80, 0.6 + 0.2 * math.sin(t * 0.1))
+        cine_ship(x, y, 0, 2.2, t)
+        pygame.draw.circle(canvas, (70, 180, 240), (int(x), int(y)), int(48 + 3 * math.sin(t * 0.12)), 1)
+
+
+# ------------------------------------------------------------------ SECTORES (8)
+def _fx_s0(t, col):                    # Nebulosa: nubes de luz a la deriva
+    for i in range(7):
+        x = (chrand(i * 3) * W_ + t * 0.18 * (1 + chrand(i * 3 + 1))) % (W_ + 160) - 80
+        cine_glow(x, H_ * (0.12 + 0.5 * chrand(i * 3 + 2)), cmix(col, (120, 80, 255), chrand(i) * 0.7), 112, 0.55)
+
+
+def _fx_s1(t, col):                    # Cinturón rojo: asteroides
+    for i in range(13):
+        sp = 0.4 + chrand(i * 3 + 1) * 0.9
+        x = (chrand(i * 3) * (W_ + 80) - t * sp) % (W_ + 80) - 40
+        y = H_ * (0.06 + 0.55 * chrand(i * 3 + 2))
+        r = 5 + chrand(i + 9) * 11
+        rot = t * 0.02 * (1 if i % 2 else -1) + i
+        pts = [(x + math.cos(rot + k * 0.9) * r * (0.7 + 0.5 * chrand(i * 11 + k)), y + math.sin(rot + k * 0.9) * r * (0.7 + 0.5 * chrand(i * 11 + k))) for k in range(7)]
+        if chrand(i + 70) > 0.6:
+            cine_glow(x, y, (255, 90, 30), r * 2.2, 0.5)
+        pygame.draw.polygon(canvas, (96, 58, 52), pts)
+        pygame.draw.polygon(canvas, (30, 14, 16), pts, 1)
+
+
+def _fx_s2(t, col):                    # Núcleo estelar: una estrella que late
+    cx, cy = W_ * 0.2, H_ * 0.34
+    cine_glow(cx, cy, (255, 170, 70), 168, 0.75 + 0.25 * math.sin(t * 0.07))
+    for i in range(14):
+        a = i * 0.449 + t * 0.012
+        d1 = 72 + 14 * math.sin(t * 0.08 + i)
+        pygame.draw.line(canvas, (255, 210, 110), (int(cx + math.cos(a) * 40), int(cy + math.sin(a) * 40)), (int(cx + math.cos(a) * d1), int(cy + math.sin(a) * d1)), 2)
+    pygame.draw.circle(canvas, (255, 232, 150), (int(cx), int(cy)), 38)
+    pygame.draw.circle(canvas, (255, 250, 220), (int(cx - 6), int(cy - 6)), 22)
+
+
+def _fx_s3(t, col):                    # Abismo glacial: aurora, copos y cristales
+    for x in range(0, W_ + 24, 24):
+        for b in range(2):
+            y = H_ * (0.20 + 0.16 * b) + 16 * math.sin(x * 0.02 + t * 0.03 + b * 2)
+            cine_glow(x, y, (30, 150, 130) if b == 0 else (60, 100, 190), 32, 0.45)
+    for i in range(46):
+        x = (chrand(i) * W_ + 10 * math.sin(t * 0.02 + i)) % W_
+        y = (chrand(i + 50) * H_ + t * (0.4 + chrand(i + 90) * 0.7)) % H_
+        canvas.fill((210, 235, 255), (int(x), int(y), 2, 2))
+    for i in range(6):
+        x = W_ * (0.08 + 0.16 * i)
+        y = H_ * (0.40 + 0.12 * chrand(i + 5)) + 6 * math.sin(t * 0.03 + i)
+        s = 8 + 10 * chrand(i + 20)
+        rot = t * 0.01 + i
+        pts = [(x + math.cos(rot + k * 2.094) * s, y + math.sin(rot + k * 2.094) * s * 1.6) for k in range(3)]
+        pygame.draw.polygon(canvas, (150, 205, 245), pts)
+        pygame.draw.polygon(canvas, (235, 250, 255), pts, 1)
+
+
+def _fx_s4(t, col):                    # Colmena verde: esporas y vainas que laten
+    for i in range(7):
+        x = W_ * (0.05 + 0.15 * i + 0.04 * chrand(i))
+        y = H_ * 0.56 + 10 * chrand(i + 3)
+        r = 20 + 8 * math.sin(t * 0.06 + i) + 8 * chrand(i + 8)
+        pygame.draw.circle(canvas, (20, 56, 26), (int(x), int(y)), int(r))
+        pygame.draw.circle(canvas, (60, 150, 60), (int(x), int(y)), int(r * 0.62))
+        cine_glow(x, y, (80, 220, 70), r * 1.4, 0.45 + 0.3 * math.sin(t * 0.06 + i))
+        pygame.draw.circle(canvas, (200, 255, 150), (int(x - r * 0.2), int(y - r * 0.2)), max(1, int(r * 0.12)))
+    for i in range(42):
+        x = (chrand(i) * W_ + 14 * math.sin(t * 0.03 + i * 2)) % W_
+        y = (chrand(i + 60) * H_ - t * (0.3 + chrand(i + 100) * 0.6)) % H_
+        cine_glow(x, y, (120, 255, 80), 8, 0.5)
+
+
+def _fx_s5(t, col):                    # Vacío oscuro: ojos que parpadean en la negrura
+    for i in range(3):
+        ev = (t + i * 47) // 140
+        ph = (t + i * 47) % 140
+        if ph < 110:
+            ex, ey = W_ * (0.08 + 0.62 * chrand(ev * 7 + i)), H_ * (0.10 + 0.40 * chrand(ev * 5 + i + 3))
+            lid = abs(math.sin(ph * 0.05))
+            hgt = max(1, int(7 * min(1.0, lid * 2)))
+            a = min(1.0, ph / 20.0) * min(1.0, (110 - ph) / 20.0)
+            cine_glow(ex, ey, (255, 40, 200), 40, a * 0.8)
+            for dx in (-12, 12):
+                pygame.draw.ellipse(canvas, (255, int(80 + 100 * a), 230), (int(ex + dx - 7), int(ey - hgt // 2), 14, hgt))
+
+
+def _fx_s6(t, col):                    # Forja solar: núcleo del reactor con arcos de plasma
+    cx, cy = W_ * 0.2, H_ * 0.34
+    cine_glow(cx, cy, (255, 130, 30), 160, 0.8 + 0.2 * math.sin(t * 0.1))
+    for rr, w in ((54, 2), (42, 1)):
+        pygame.draw.circle(canvas, (255, 190, 80), (int(cx), int(cy)), rr, w)
+    pygame.draw.circle(canvas, (255, 220, 120), (int(cx), int(cy)), 30)
+    pygame.draw.circle(canvas, (255, 255, 230), (int(cx), int(cy)), 16)
+    for i in range(6):
+        a = i * 1.047 + t * 0.01
+        pts = [(cx + math.cos(a) * 30, cy + math.sin(a) * 30)]
+        for k in range(1, 6):
+            jit = (chrand((t // 2) * 13 + i * 7 + k) - 0.5) * 14
+            pts.append((cx + math.cos(a) * (30 + k * 15) + math.sin(a) * jit, cy + math.sin(a) * (30 + k * 15) - math.cos(a) * jit))
+        pygame.draw.lines(canvas, (255, 230, 150), False, [(int(x), int(y)) for x, y in pts], 2)
+    for i in range(30):
+        x = (chrand(i) * W_ + 8 * math.sin(t * 0.05 + i)) % W_
+        y = (chrand(i + 40) * H_ - t * (0.8 + chrand(i + 80))) % H_
+        cine_glow(x, y, (255, 150, 40), 8, 0.5)
+
+
+def _fx_s7(t, col):                    # Trono galáctico: la puerta final y relámpagos
+    cx = W_ * 0.5
+    for dx in (-1, 1):
+        pygame.draw.polygon(canvas, (24, 8, 24), [(int(cx + dx * 82), int(H_ * 0.62)), (int(cx + dx * 82), int(H_ * 0.10)), (int(cx + dx * 52), int(H_ * 0.10)), (int(cx + dx * 52), int(H_ * 0.62))])
+    pygame.draw.polygon(canvas, (24, 8, 24), [(int(cx - 82), int(H_ * 0.12)), (int(cx), int(H_ * 0.0)), (int(cx + 82), int(H_ * 0.12)), (int(cx + 52), int(H_ * 0.20)), (int(cx - 52), int(H_ * 0.20))])
+    pygame.draw.rect(canvas, (255, 60, 70), (int(cx - 4), int(H_ * 0.20), 8, int(H_ * 0.42)))
+    cine_glow(cx, H_ * 0.40, (255, 40, 60), 112, 0.7 + 0.3 * math.sin(t * 0.08))
+    if t % 160 < 5:
+        canvas.fill((60, 14, 18), special_flags=pygame.BLEND_RGB_ADD)
+
+
+_SECTOR_FX = [_fx_s0, _fx_s1, _fx_s2, _fx_s3, _fx_s4, _fx_s5, _fx_s6, _fx_s7]
+
+
+def art_sector(sec, t):
+    global W_, H_
+    W_, H_ = WIDTH, HEIGHT
+    col = SECTOR_COLORS[sec]
+    canvas.blit(cine_bg(cmix((0, 0, 0), col, 0.10), cmix((0, 0, 0), col, 0.34)), (0, 0))
+    cine_stars(t, vx=-0.08, dim=0.4 if sec == 5 else 1.0)
+    _SECTOR_FX[sec](t, col)
+    bx, by = WIDTH * 0.74, HEIGHT * 0.30 + 6 * math.sin(t * 0.03)           # el guardián, en las sombras
+    cine_glow(bx, by, cmix((0, 0, 0), col, 0.7), 120, 0.55 + 0.2 * math.sin(t * 0.05))
+    canvas.blit(cine_boss_img(sec + 1, 2.0, 2), cine_boss_img(sec + 1, 2.0, 2).get_rect(center=(int(bx), int(by))))
+    e = cease(t / 70.0)                                                           # tu nave llega y se queda
+    cine_ship(-30 + (WIDTH * 0.26 + 30) * e, HEIGHT * 0.42 + 5 * math.sin(t * 0.06), -90 + 6 * math.sin(t * 0.05), 1.0, t)
+
+
+# ------------------------------------------------------------------ DIÁLOGO DEL BOSS
+def art_boss_pre(k, t):
+    W, H = WIDTH, HEIGHT
+    aura = BOSS_AURA[k]
+    canvas.blit(cine_bg(cmix((0, 0, 0), aura, 0.07), cmix((0, 0, 0), aura, 0.30)), (0, 0))
+    cine_stars(t, vx=-0.04, dim=0.7)
+    cx, cy = W * 0.5, H * 0.31
+    for i in range(14):
+        a = i * 0.449 + t * 0.008
+        pygame.draw.line(canvas, cmix((0, 0, 0), aura, 0.30), (int(cx + math.cos(a) * 40), int(cy + math.sin(a) * 40)), (int(cx + math.cos(a) * 230), int(cy + math.sin(a) * 230)), 2)
+    cine_glow(cx, cy, aura, 136, 0.7 + 0.3 * math.sin(t * 0.09))
+    ent = cease(t / 55.0)
+    y = cy - (1 - ent) * 190 + 5 * math.sin(t * 0.05)
+    img = cine_boss_img(k, round((2.1 + min(t, 260) * 0.0022) * 25) / 25.0)
+    canvas.blit(img, img.get_rect(center=(int(cx), int(y))))
+    if t > 55:
+        cine_glow(cx, y, cmix(aura, (255, 255, 255), 0.2), 72, 0.25 + 0.25 * math.sin(t * 0.2))
+    cine_ship(W * 0.16, H * 0.50 + 4 * math.sin(t * 0.06), -38, 1.0, t)
+
+
+# ------------------------------------------------------------------ BOSS DERROTADO
+def art_boss_win(k, t):
+    W, H = WIDTH, HEIGHT
+    aura = BOSS_AURA[k]
+    f = cease((t - 62) / 50.0)
+    top = cmix(cmix((0, 0, 0), aura, 0.07), cmix((0, 0, 0), SECTOR_COLORS[k - 1], 0.45), f)
+    bot = cmix(cmix((0, 0, 0), aura, 0.30), cmix((0, 0, 0), SECTOR_COLORS[k - 1], 0.85), f)
+    canvas.blit(cine_bg(cmix(top, top, 0), bot), (0, 0))
+    cine_stars(t, vx=-0.05)
+    cx, cy = W * 0.5, H * 0.31
+    if t < 62:                                                         # se rompe: sacudidas, destellos y explosiones
+        ox, oy = (chrand(t * 3) - 0.5) * 8, (chrand(t * 3 + 1) - 0.5) * 6
+        img = cine_boss_img(k, 2.1, 1 if (t // 3) % 2 == 0 else 0)
+        canvas.blit(img, img.get_rect(center=(int(cx + ox), int(cy + oy))))
+        for b in range(5):
+            ev, age = divmod(t + b * 9, 26)
+            cine_boom(cx + (chrand(ev * 3 + b) - 0.5) * 150, cy + (chrand(ev * 5 + b + 7) - 0.5) * 90, age, 0.7, (255, 190, 80))
+        if t % 14 == 0:
+            add_shake(3)
+    else:                                                              # estalla: onda de choque y escombros
+        a = t - 62
+        cine_boom(cx, cy, a, 3.0, (255, 230, 150))
+        pygame.draw.circle(canvas, cmix(aura, (255, 255, 255), 0.4), (int(cx), int(cy)), int(6 + a * 5), 2)
+        for i in range(30):
+            ang = chrand(i) * 6.2832
+            sp = 0.9 + chrand(i + 50) * 2.6
+            px, py = cx + math.cos(ang) * sp * a, cy + math.sin(ang) * sp * a + 0.02 * a * a
+            sz = int(max(0, 7 * (1 - a / 100.0)) * (0.5 + chrand(i + 90)))
+            if sz > 0:
+                canvas.fill(cmix(aura, (255, 255, 255), chrand(i + 20) * 0.6), (int(px), int(py), sz, sz))
+        if a < 14:
+            fl = pygame.Surface((WIDTH, HEIGHT))
+            fl.fill((255, 255, 255))
+            fl.set_alpha(int(255 * (1 - a / 14.0)))
+            canvas.blit(fl, (0, 0))
+        if a > 30:                                                     # la luz vuelve al sector
+            cine_glow(W * 0.5, -10, SECTOR_COLORS[k - 1], 192, cease((a - 30) / 60.0) * 0.8)
+    s = max(0, t - 70)                                                 # tu nave cruza triunfante
+    cine_ship(-40 + s * 2.6 if s * 2.6 < W * 0.55 else W * 0.55 - 40 + 6 * math.sin(t * 0.05), H * 0.46 + (0 if s * 2.6 < W * 0.55 else 3 * math.sin(t * 0.07)), -90, 1.1, t)
+
+
+# ------------------------------------------------------------------ EPÍLOGO (4 páginas)
+def art_end(page, t):
+    W, H = WIDTH, HEIGHT
+    if page == 0:                      # los ocho faros se encienden
+        canvas.blit(cine_bg((4, 6, 22), (22, 30, 70)), (0, 0))
+        cine_stars(t, vx=-0.03)
+        for i in range(8):
+            gx = W * (0.09 + 0.116 * i)
+            gy = H * (0.40 + 0.08 * math.sin(i * 1.1))
+            on = cease((t - 12 - i * 16) / 26.0)
+            col = SECTOR_COLORS[i]
+            pygame.draw.polygon(canvas, (28, 30, 50), [(int(gx - 7), int(H * 0.60)), (int(gx - 3), int(gy)), (int(gx + 3), int(gy)), (int(gx + 7), int(H * 0.60))])
+            if on > 0:
+                cine_glow(gx, gy - 4, col, 72, on)
+                pygame.draw.line(canvas, cmix((28, 30, 50), col, on), (int(gx), int(gy - 4)), (int(gx + 60 * on), int(gy - 30 * on)), 2)
+                pygame.draw.line(canvas, cmix((28, 30, 50), col, on), (int(gx), int(gy - 4)), (int(gx - 60 * on), int(gy - 30 * on)), 2)
+            pygame.draw.circle(canvas, cmix((60, 60, 80), (255, 255, 255), on), (int(gx), int(gy - 4)), 4)
+    elif page == 1:                    # las flotas caídas descansan
+        canvas.blit(cine_bg((6, 8, 28), (26, 40, 84)), (0, 0))
+        cine_stars(t, vx=-0.03)
+        for i in range(9):
+            x = (chrand(i) * (W + 120) + t * (0.12 + 0.08 * chrand(i + 9))) % (W + 120) - 60
+            y = H * (0.08 + 0.46 * chrand(i + 20)) + 5 * math.sin(t * 0.02 + i)
+            al = int(70 + 60 * (0.5 + 0.5 * math.sin(t * 0.03 + i * 1.7)))
+            cine_glow(x, y, (80, 130, 230), 40, 0.35)
+            cine_ship(x, y, -90 + (chrand(i + 5) - 0.5) * 14, 0.7 + 0.5 * chrand(i + 30), t, False, al, (30, 50, 110))
+        if (t // 90) % 2 == 0:
+            p = (t % 90) / 90.0
+            pygame.draw.line(canvas, (220, 235, 255), (int(W * 0.8 - p * 220), int(H * 0.06 + p * 90)), (int(W * 0.8 - p * 220 + 30), int(H * 0.06 + p * 90 - 12)), 2)
+    elif page == 2:                    # una sola nave se negó a rendirse: vuela hacia el amanecer
+        rise = cease(t / 240.0)
+        canvas.blit(cine_bg(cmix((6, 8, 30), (40, 40, 110), rise), cmix((30, 20, 60), (255, 140, 70), rise)), (0, 0))
+        cine_stars(t, vx=-0.04, dim=1.0 - 0.7 * rise)
+        sx, sy = W * 0.5, H * (0.78 - 0.30 * rise)
+        cine_glow(sx, sy, (255, 190, 100), 176, 0.5 + 0.5 * rise)
+        pygame.draw.circle(canvas, cmix((90, 50, 40), (255, 230, 160), rise), (int(sx), int(sy)), int(30 + 14 * rise))
+        for i in range(10):
+            a = -1.57 + (i - 4.5) * 0.28
+            pygame.draw.line(canvas, cmix((40, 30, 60), (255, 180, 90), rise), (int(sx), int(sy)), (int(sx + math.cos(a) * 300), int(sy + math.sin(a) * 300)), 1)
+        e = cease(t / 200.0)
+        cine_ship(W * (0.18 + 0.30 * e), H * (0.52 - 0.14 * e), -60, 1.2 - 0.3 * e, t)
+    else:                              # fuegos artificiales sobre la galaxia en paz
+        canvas.blit(cine_bg((4, 6, 24), (30, 22, 66)), (0, 0))
+        cine_stars(t, vx=-0.02)
+        for b in range(16):
+            t0 = 10 + 34 * b
+            if t >= t0:
+                tt = (t - t0) % (34 * 16)
+                if tt <= 70:
+                    cine_firework(W * (0.12 + 0.76 * chrand(b * 3 + 1)), H * (0.10 + 0.34 * chrand(b * 3 + 2)), tt, SECTOR_COLORS[b % 8])
+        cine_ship(W * 0.5, H * 0.50 + 3 * math.sin(t * 0.05), 0, 1.3, t)
+    return
+
+
+def draw_story_art(kind, idx, page, t):
+    global W_, H_
+    W_, H_ = WIDTH, HEIGHT
+    if kind == "intro":
+        art_intro(page, t)
+    elif kind == "s":
+        art_sector(idx, t)
+    elif kind == "bp":
+        art_boss_pre(idx + 1, t)
+    elif kind == "bw":
+        art_boss_win(idx + 1, t)
+    else:
+        art_end(page, t)
+    cine_vignette()
 
 
 story_scenes = []
@@ -4753,6 +5231,7 @@ story_si = 0
 story_pi = 0
 story_t = 0.0
 story_then = None
+story_clock = 0
 _wrap_cache = {}
 
 
@@ -4782,8 +5261,9 @@ def story_text():
 
 def run_story(scenes, then):
     """Muestra una o varias escenas de historia y al terminar (o al saltarlas) llama a then()."""
-    global game_state, story_scenes, story_si, story_pi, story_t, story_then
+    global game_state, story_scenes, story_si, story_pi, story_t, story_then, story_clock
     story_scenes, story_si, story_pi, story_t, story_then = scenes, 0, 0, 0.0, then
+    story_clock = 0
     release_all()
     block_input()
     pygame.time.set_timer(ENEMY_SPAWN, 0)
@@ -4827,22 +5307,46 @@ def story_touch(e_type, tid, tx, ty):
         story_advance()
 
 
+def cine_panel(col):
+    key = ("panel", col)
+    p = _CINE.get(key)
+    if p is None:
+        pw, ph = int(WIDTH * 0.94), int(HEIGHT * 0.33)
+        p = pygame.Surface((pw, ph), pygame.SRCALPHA)
+        try:
+            pygame.draw.rect(p, (6, 8, 22, 205), (0, 0, pw, ph), 0, 8)
+            pygame.draw.rect(p, (col[0], col[1], col[2], 255), (0, 0, pw, ph), 2, 8)
+        except Exception:
+            pygame.draw.rect(p, (6, 8, 22, 205), (0, 0, pw, ph))
+            pygame.draw.rect(p, (col[0], col[1], col[2], 255), (0, 0, pw, ph), 2)
+        p = _CINE[key] = p.convert_alpha()
+    return p
+
+
 def draw_story():
-    global story_t
+    global story_t, story_clock
     if game_state != "STORY" or story_si >= len(story_scenes):
         return
-    title, col, pages = story_scenes[story_si]
+    title, col, pages, kind, idx = story_scenes[story_si]
     text = story_text()
     story_t += 1
-    canvas.blit(dark_surf, (0, 0))
+    story_clock += 1
+    draw_story_art(kind, idx, story_pi, int(story_t))          # la escena animada de fondo
+    bar = int(HEIGHT * 0.065 * cease(story_clock / 28.0))      # barras de cine que se deslizan al entrar
+    if bar > 0:
+        canvas.fill((0, 0, 0), (0, 0, WIDTH, bar))
+        canvas.fill((0, 0, 0), (0, HEIGHT - bar, WIDTH, bar))
     tf = font_large if font_large.size(title)[0] < WIDTH * 0.9 else font_medium
-    ty0 = int(HEIGHT * 0.09)
-    draw_text(tf, title, col, WIDTH // 2, ty0)
-    ly = ty0 + tf.get_height() + 6
+    draw_text(tf, title, col, WIDTH // 2, bar + 3)
+    ly = bar + 3 + tf.get_height() + 4
     pygame.draw.line(canvas, col, (int(WIDTH * 0.2), ly), (int(WIDTH * 0.8), ly), 2)
-    lines = wrap_text(font_medium, text, int(WIDTH * 0.78))
+    panel = cine_panel(col)
+    pw, ph = panel.get_size()
+    px, py = (WIDTH - pw) // 2, int(HEIGHT * 0.60)
+    canvas.blit(panel, (px, py))
+    lines = wrap_text(font_medium, text, pw - 28)
     n = int(story_t * 1.3)
-    x0, y, lh = int(WIDTH * 0.11), int(HEIGHT * 0.31), font_medium.get_height() + 6
+    y, lh = py + 9, font_medium.get_height() + 4
     shown = 0
     for ln in lines:
         if shown >= n:
@@ -4850,13 +5354,20 @@ def draw_story():
         part = ln[:max(0, n - shown)]
         shown += len(ln) + 1
         if part:
-            canvas.blit(text_surf(font_medium, part, (236, 240, 255)), (x0, y))
+            canvas.blit(text_surf(font_medium, part, (236, 240, 255)), (px + 14, y))
         y += lh
     if n >= len(text) and (pygame.time.get_ticks() // 450) % 2 == 0:
-        draw_text(font_small, "toca para continuar", LIGHT_GRAY, WIDTH // 2, int(HEIGHT * 0.90))
+        draw_text(font_small, "toca para continuar", LIGHT_GRAY, px + pw - 74, py - 16)
     for k in range(len(pages)):
-        pygame.draw.circle(canvas, col if k == story_pi else (70, 74, 100),
-                           (int(WIDTH // 2 + (k - (len(pages) - 1) / 2.0) * 12), int(HEIGHT * 0.84)), 3)
+        pygame.draw.circle(canvas, col if k == story_pi else (70, 74, 100), (px + 14 + k * 12, py - 8), 3)
+    if story_t < 18:                                            # entrada suave desde negro en cada página
+        fs = _CINE.get("fade")
+        if fs is None:
+            fs = _CINE["fade"] = pygame.Surface((WIDTH, HEIGHT))
+            fs.fill((0, 0, 0))
+        fs.set_alpha(int(255 * (1 - story_t / 18.0)))
+        canvas.blit(fs, (0, 0))
+    btn_story_skip.rect.center = (WIDTH - 46, bar + 24)
     btn_story_skip.draw(canvas)
 
 
